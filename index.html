@@ -17,15 +17,23 @@
     <header class="hero">
       <p class="eyebrow">OpenRouter Case Runner</p>
       <h1>多模型多轮 Case 对比</h1>
-      <p class="subtitle">模型从 OpenRouter 官方模型库加载，按表格轮次一次执行完整流程。</p>
+      <p class="subtitle">支持 OpenRouter 官方模型列表或自定义接口，按表格环节一次执行完整流程。</p>
     </header>
 
     <section class="panel config-panel">
       <h2>全局配置</h2>
       <div class="form-grid">
         <label>
-          <span>OpenRouter API Key</span>
+          <span id="apiKeyLabel">OpenRouter API Key</span>
           <input id="apiKeyInput" type="password" placeholder="sk-or-v1-..." autocomplete="off">
+        </label>
+
+        <label>
+          <span>接口来源</span>
+          <select id="providerSelect">
+            <option value="openrouter">OpenRouter（官方模型列表）</option>
+            <option value="custom">自定义接口（手动输入模型）</option>
+          </select>
         </label>
 
         <label>
@@ -33,9 +41,9 @@
           <input id="temperatureInput" type="number" value="0" min="0" max="2" step="0.1">
         </label>
 
-        <label>
-          <span>历史空间 ID</span>
-          <input id="workspaceInput" type="text" value="default" placeholder="default" autocomplete="off">
+        <label id="baseUrlRow" class="full-span hidden">
+          <span>Base URL（chat completions 接口）</span>
+          <input id="baseUrlInput" type="text" placeholder="https://api.openai.com/v1/chat/completions" autocomplete="off">
         </label>
 
         <label class="checkbox-row">
@@ -44,15 +52,9 @@
         </label>
 
         <label class="full-span">
-          <span>System Prompt（全流程生效）</span>
+          <span>System Prompt</span>
           <textarea id="systemPromptInput" rows="4"></textarea>
         </label>
-      </div>
-
-      <div class="actions">
-        <button id="runWorkflowBtn" class="primary">执行完整流程</button>
-        <button id="clearResultsBtn">清空结果</button>
-        <button id="exportBtn">导出 JSON</button>
       </div>
       <div class="cost-estimate-row">
         <label class="cost-estimate-input">
@@ -84,21 +86,26 @@
           <button id="clearHistoryBtn">清空历史</button>
         </div>
       </div>
-      <p class="hint">保存模型列、System Prompt、Temperature、轮次 Prompt。</p>
+      <p class="hint">保存模型列、System Prompt、Temperature、环节 Prompt。</p>
       <div id="historyList" class="history-list"></div>
     </section>
 
     <section class="panel table-panel">
       <div class="panel-head">
-        <h2>轮次 Case 表</h2>
+        <h2>模型测试</h2>
         <div class="actions-inline">
-          <button id="importPromptBtn">导入 md/txt</button>
-          <button id="addRowBtn" class="primary">新增轮次</button>
-          <button id="clearRowsBtn">清空轮次</button>
+          <button id="importPromptBtn">导入环节 md/txt</button>
+          <button id="addRowBtn" class="primary">新增环节</button>
+          <button id="clearRowsBtn">清空环节</button>
         </div>
       </div>
+      <div class="actions">
+        <button id="runWorkflowBtn" class="primary">执行完整流程</button>
+        <button id="clearResultsBtn">清空结果</button>
+        <button id="exportBtn">导出 JSON</button>
+      </div>
       <input id="promptFileInput" type="file" accept=".md,.txt,text/markdown,text/plain" hidden>
-      <p class="hint">导入规则：优先按 `---` 分段；否则按 Markdown 标题分段；再按空行分段。</p>
+      <p class="hint">固定流程多轮对话导入：每个分段代表一个环节 Prompt。优先按 `---` 分段；否则按 Markdown 标题分段；再按空行分段。</p>
 
       <div class="table-wrap">
         <table id="caseTable">

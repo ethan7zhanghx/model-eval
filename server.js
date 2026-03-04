@@ -7,9 +7,23 @@ const HOST = process.env.HOST || "127.0.0.1";
 const ROOT_DIR = process.cwd();
 const DATA_DIR = path.join(ROOT_DIR, "data");
 const HISTORY_FILE = path.join(DATA_DIR, "config-history.json");
+const ZMD_RECORDS_FILE = path.join(DATA_DIR, "zhumengdao-records.json");
+const ZMD_SESSIONS_FILE = path.join(DATA_DIR, "zhumengdao-sessions.json");
 
 const MAX_CONFIG_HISTORY = 30;
+const MAX_ZMD_RECORDS = 20000;
+const MAX_ZMD_SESSIONS = 5000;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
+const PROXY_TIMEOUT_MS = 60000;
+
+const ALLOWED_PROXY_HOSTS = [
+  "ark.cn-beijing.volces.com",
+  "qianfan.baidubce.com",
+  "openrouter.ai",
+  "api.openai.com",
+  "api.anthropic.com",
+  "generativelanguage.googleapis.com",
+];
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -45,6 +59,13 @@ function clampTemperature(value) {
   return value;
 }
 
+function clampOutputTokenRatio(value) {
+  if (Number.isNaN(value)) return 1;
+  if (value < 0.1) return 0.1;
+  if (value > 4) return 4;
+  return value;
+}
+
 function normalizeHistoryItem(item) {
   if (!item || typeof item !== "object") return null;
 
@@ -70,10 +91,126 @@ function normalizeHistoryItem(item) {
     title: String(item.title || "未命名配置").slice(0, 120),
     savedAt: Number.isFinite(savedAt) ? savedAt : Date.now(),
     temperature: clampTemperature(Number(item.temperature)),
+    outputTokenRatio: clampOutputTokenRatio(Number(item.outputTokenRatio)),
     systemPrompt: String(item.systemPrompt || "").slice(0, 20000),
     selectedModels,
     rows,
   };
+}
+
+function toSafeString(value, max = 200) {
+  return String(value ?? "")
+    .trim()
+    .slice(0, max);
+}
+
+function toSafeText(value, max = 30000) {
+  return String(value ?? "").slice(0, max);
+}
+
+function toSafeNumber(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
+function normalizeZmdAction(value) {
+  const action = toSafeString(value, 40) || "unknown";
+  if (["vote", "discard", "clear", "unknown"].includes(action)) return action;
+  return "unknown";
+}
+
+function normalizeZmdRecord(item) {
+  if (!item || typeof item !== "object") return null;
+
+  const createdAt = toSafeNumber(item.createdAt);
+  const apiA = item.apiA && typeof item.apiA === "object" ? item.apiA : {};
+  const apiB = item.apiB && typeof item.apiB === "object" ? item.apiB : {};
+
+  return {
+    id: toSafeString(item.id, 120) || `rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: createdAt || Date.now(),
+    action: normalizeZmdAction(item.action),
+    sessionId: toSafeString(item.sessionId, 120),
+    turnId: toSafeString(item.turnId, 120),
+    turnOrder: toSafeNumber(item.turnOrder) || 0,
+    selected: ["a", "b", ""].includes(toSafeString(item.selected, 1)) ? toSafeString(item.selected, 1) : "",
+    selectedModel: toSafeString(item.selectedModel, 200),
+    displayOrder: (() => {
+      const order = Array.isArray(item.displayOrder) ? item.displayOrder : [];
+      const valid = order.filter((v) => v === "a" || v === "b");
+      return valid.length === 2 ? valid : ["a", "b"];
+    })(),
+    systemPrompt: toSafeText(item.systemPrompt, 12000),
+    contextMessages: Array.isArray(item.contextMessages)
+      ? item.contextMessages.slice(0, 200).map((m) => ({
+          role: ["user", "assistant", "system"].includes(String(m?.role)) ? String(m.role) : "user",
+          content: toSafeText(m?.content, 30000),
+        }))
+      : [],
+    temperature: (() => {
+      const value = toSafeNumber(item.temperature);
+      if (value == null) return null;
+      if (value < 0) return 0;
+      if (value > 2) return 2;
+      return value;
+    })(),
+    userText: toSafeText(item.userText, 30000),
+    apiA: {
+      endpointHost: toSafeString(apiA.endpointHost, 200),
+      model: toSafeString(apiA.model, 200),
+      ok: !!apiA.ok,
+      latencyMs: toSafeNumber(apiA.latencyMs),
+      content: toSafeText(apiA.content, 50000),
+    },
+    apiB: {
+      endpointHost: toSafeString(apiB.endpointHost, 200),
+      model: toSafeString(apiB.model, 200),
+      ok: !!apiB.ok,
+      latencyMs: toSafeNumber(apiB.latencyMs),
+      content: toSafeText(apiB.content, 50000),
+    },
+  };
+}
+
+function buildZmdSummary(items) {
+  const sessions = new Set();
+  let voteCount = 0;
+  let discardCount = 0;
+  let aWins = 0;
+  let bWins = 0;
+
+  for (const item of items) {
+    if (item.sessionId) sessions.add(item.sessionId);
+
+    if (item.action === "vote") {
+      voteCount += 1;
+      if (item.selected === "a") aWins += 1;
+      if (item.selected === "b") bWins += 1;
+      continue;
+    }
+
+    if (item.action === "discard") {
+      discardCount += 1;
+    }
+  }
+
+  return {
+    totalRecords: items.length,
+    totalSessions: sessions.size,
+    voteCount,
+    discardCount,
+    aWins,
+    bWins,
+    aWinRate: voteCount ? Number((aWins / voteCount).toFixed(4)) : 0,
+    bWinRate: voteCount ? Number((bWins / voteCount).toFixed(4)) : 0,
+  };
+}
+
+function sanitizeLimit(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 300;
+  return Math.min(2000, Math.floor(parsed));
 }
 
 async function ensureHistoryFile() {
@@ -105,6 +242,230 @@ async function writeHistoryDb(db) {
   await fs.writeFile(tmpFile, `${JSON.stringify(db, null, 2)}\n`, "utf8");
   await fs.rename(tmpFile, HISTORY_FILE);
 }
+
+async function ensureZmdRecordsFile() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  try {
+    await fs.access(ZMD_RECORDS_FILE);
+  } catch {
+    await fs.writeFile(ZMD_RECORDS_FILE, "[]\n", "utf8");
+  }
+}
+
+async function readZmdRecords() {
+  await ensureZmdRecordsFile();
+  try {
+    const raw = await fs.readFile(ZMD_RECORDS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeZmdRecord).filter(Boolean).slice(0, MAX_ZMD_RECORDS);
+  } catch {
+    return [];
+  }
+}
+
+async function writeZmdRecords(items) {
+  await ensureZmdRecordsFile();
+  const normalized = Array.isArray(items) ? items.map(normalizeZmdRecord).filter(Boolean).slice(0, MAX_ZMD_RECORDS) : [];
+  const tmpFile = `${ZMD_RECORDS_FILE}.tmp`;
+  await fs.writeFile(tmpFile, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+  await fs.rename(tmpFile, ZMD_RECORDS_FILE);
+}
+
+// ── Sessions storage ──────────────────────────────────────────────────────────
+
+function normalizeZmdSession(item) {
+  if (!item || typeof item !== "object") return null;
+  const createdAt = toSafeNumber(item.createdAt);
+  const updatedAt = toSafeNumber(item.updatedAt);
+  const config = item.config && typeof item.config === "object" ? item.config : {};
+  const messages = Array.isArray(item.messages)
+    ? item.messages.slice(0, 500).map((m) => ({
+        role: ["user", "assistant"].includes(String(m?.role)) ? String(m.role) : "user",
+        content: toSafeText(m?.content, 30000),
+        source: m?.source ? toSafeString(m.source, 1) : undefined,
+        time: m?.time ? toSafeString(m.time, 20) : undefined,
+      }))
+    : [];
+
+  return {
+    id: toSafeString(item.id, 120) || `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: createdAt || Date.now(),
+    updatedAt: updatedAt || Date.now(),
+    roleId: toSafeString(item.roleId, 120),
+    roleName: toSafeString(item.roleName, 120),
+    systemPrompt: toSafeText(item.systemPrompt, 12000),
+    temperature: (() => {
+      const v = toSafeNumber(item.temperature);
+      if (v == null) return 0;
+      return Math.max(0, Math.min(2, v));
+    })(),
+    config: {
+      modelA: toSafeString(config.modelA, 200),
+      modelB: toSafeString(config.modelB, 200),
+      endpointHostA: toSafeString(config.endpointHostA, 200),
+      endpointHostB: toSafeString(config.endpointHostB, 200),
+    },
+    turnCount: Math.max(0, Math.floor(toSafeNumber(item.turnCount) || 0)),
+    messages,
+  };
+}
+
+async function ensureZmdSessionsFile() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  try { await fs.access(ZMD_SESSIONS_FILE); }
+  catch { await fs.writeFile(ZMD_SESSIONS_FILE, "[]\n", "utf8"); }
+}
+
+async function readZmdSessions() {
+  await ensureZmdSessionsFile();
+  try {
+    const raw = await fs.readFile(ZMD_SESSIONS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeZmdSession).filter(Boolean).slice(0, MAX_ZMD_SESSIONS);
+  } catch { return []; }
+}
+
+async function writeZmdSessions(items) {
+  await ensureZmdSessionsFile();
+  const normalized = Array.isArray(items) ? items.map(normalizeZmdSession).filter(Boolean).slice(0, MAX_ZMD_SESSIONS) : [];
+  const tmpFile = `${ZMD_SESSIONS_FILE}.tmp`;
+  await fs.writeFile(tmpFile, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+  await fs.rename(tmpFile, ZMD_SESSIONS_FILE);
+}
+
+async function handleZmdSessionsApi(req, res, urlObj) {
+  // GET /api/zhumengdao-sessions          → list sessions (newest first, limit param)
+  // GET /api/zhumengdao-sessions?id=xxx   → single session
+  // POST /api/zhumengdao-sessions         → create session { session }
+  // PATCH /api/zhumengdao-sessions        → update session { id, patch }
+  // DELETE /api/zhumengdao-sessions?id=xx → delete one session
+
+  if (req.method === "GET") {
+    const id = urlObj.searchParams.get("id");
+    const sessions = await readZmdSessions();
+    if (id) {
+      const found = sessions.find((s) => s.id === id);
+      if (!found) { sendJson(res, 404, { error: "Session not found" }); return; }
+      sendJson(res, 200, { session: found });
+      return;
+    }
+    const limit = sanitizeLimit(urlObj.searchParams.get("limit") || "200");
+    sendJson(res, 200, { sessions: sessions.slice(0, limit), total: sessions.length });
+    return;
+  }
+
+  if (req.method === "POST") {
+    let body;
+    try { body = await parseJsonBody(req); }
+    catch (error) { sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) }); return; }
+
+    const session = normalizeZmdSession(body?.session);
+    if (!session) { sendJson(res, 400, { error: "Invalid session" }); return; }
+
+    const sessions = await readZmdSessions();
+    // Upsert: replace if same id exists
+    const idx = sessions.findIndex((s) => s.id === session.id);
+    if (idx >= 0) { sessions[idx] = session; }
+    else { sessions.unshift(session); }
+    await writeZmdSessions(sessions.slice(0, MAX_ZMD_SESSIONS));
+    sendJson(res, 200, { session });
+    return;
+  }
+
+  if (req.method === "PATCH") {
+    let body;
+    try { body = await parseJsonBody(req); }
+    catch (error) { sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) }); return; }
+
+    const { id, patch } = body || {};
+    if (!id || !patch) { sendJson(res, 400, { error: "id and patch required" }); return; }
+
+    const sessions = await readZmdSessions();
+    const idx = sessions.findIndex((s) => s.id === id);
+    if (idx < 0) { sendJson(res, 404, { error: "Session not found" }); return; }
+
+    const updated = normalizeZmdSession({ ...sessions[idx], ...patch, id, updatedAt: Date.now() });
+    sessions[idx] = updated;
+    await writeZmdSessions(sessions);
+    sendJson(res, 200, { session: updated });
+    return;
+  }
+
+  if (req.method === "DELETE") {
+    const id = urlObj.searchParams.get("id");
+    if (!id) { sendJson(res, 400, { error: "id required" }); return; }
+    const sessions = await readZmdSessions();
+    const filtered = sessions.filter((s) => s.id !== id);
+    await writeZmdSessions(filtered);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  sendJson(res, 405, { error: "Method not allowed" });
+}
+
+async function handleLlmProxy(req, res) {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "Method not allowed" });
+    return;
+  }
+
+  let body;
+  try {
+    body = await parseJsonBody(req);
+  } catch (error) {
+    sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) });
+    return;
+  }
+
+  const { endpoint, apiKey, payload: llmPayload } = body || {};
+
+  if (!endpoint || typeof endpoint !== "string") {
+    sendJson(res, 400, { error: "Missing endpoint" });
+    return;
+  }
+
+  let targetUrl;
+  try {
+    targetUrl = new URL(endpoint);
+  } catch {
+    sendJson(res, 400, { error: "Invalid endpoint URL" });
+    return;
+  }
+
+  if (!ALLOWED_PROXY_HOSTS.includes(targetUrl.hostname)) {
+    sendJson(res, 403, { error: `Host not allowed: ${targetUrl.hostname}` });
+    return;
+  }
+
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+  console.log("[proxy] endpoint:", endpoint);
+  console.log("[proxy] apiKey:", apiKey ? apiKey.slice(0, 8) + "..." : "(empty)");
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+
+    const upstream = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(llmPayload),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    const upstreamBody = await upstream.text();
+    res.writeHead(upstream.status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(upstreamBody);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    sendJson(res, 502, { error: "Upstream request failed", detail: msg });
+  }
+}
+
 
 async function parseJsonBody(req) {
   const chunks = [];
@@ -166,6 +527,50 @@ async function handleHistoryApi(req, res, urlObj) {
   sendJson(res, 405, { error: "Method not allowed" });
 }
 
+async function handleZmdRecordsApi(req, res, urlObj) {
+  if (req.method === "GET") {
+    const limit = sanitizeLimit(urlObj.searchParams.get("limit"));
+    const records = await readZmdRecords();
+    const items = records.slice(0, limit);
+    sendJson(res, 200, {
+      storage: "local-file",
+      items,
+      summary: buildZmdSummary(items),
+    });
+    return;
+  }
+
+  if (req.method === "POST") {
+    let body;
+    try {
+      body = await parseJsonBody(req);
+    } catch (error) {
+      sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) });
+      return;
+    }
+
+    const item = normalizeZmdRecord(body?.item);
+    if (!item) {
+      sendJson(res, 400, { error: "Invalid record item" });
+      return;
+    }
+
+    const records = await readZmdRecords();
+    records.unshift(item);
+    await writeZmdRecords(records.slice(0, MAX_ZMD_RECORDS));
+    sendJson(res, 200, { storage: "local-file", item });
+    return;
+  }
+
+  if (req.method === "DELETE") {
+    await writeZmdRecords([]);
+    sendJson(res, 200, { storage: "local-file", ok: true });
+    return;
+  }
+
+  sendJson(res, 405, { error: "Method not allowed" });
+}
+
 function resolveStaticFile(urlPath) {
   const decoded = decodeURIComponent(urlPath || "/");
   const relative = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "");
@@ -189,11 +594,15 @@ async function handleStatic(req, res, urlObj) {
   try {
     const stat = await fs.stat(filePath);
     if (stat.isDirectory()) {
+      // Redirect /foo to /foo/ so relative asset paths resolve correctly
+      if (!urlObj.pathname.endsWith("/")) {
+        res.writeHead(301, { Location: urlObj.pathname + "/" });
+        res.end();
+        return;
+      }
       const indexPath = path.join(filePath, "index.html");
       const body = await fs.readFile(indexPath);
-      res.writeHead(200, {
-        "Content-Type": "text/html; charset=utf-8",
-      });
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(body);
       return;
     }
@@ -215,6 +624,33 @@ const server = http.createServer(async (req, res) => {
   if (urlObj.pathname === "/api/config-history") {
     try {
       await handleHistoryApi(req, res, urlObj);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
+  if (urlObj.pathname === "/api/llm-proxy") {
+    try {
+      await handleLlmProxy(req, res);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
+  if (urlObj.pathname === "/api/zhumengdao-records") {
+    try {
+      await handleZmdRecordsApi(req, res, urlObj);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
+  if (urlObj.pathname === "/api/zhumengdao-sessions") {
+    try {
+      await handleZmdSessionsApi(req, res, urlObj);
     } catch (error) {
       sendJson(res, 500, { error: "Server error", detail: String(error) });
     }

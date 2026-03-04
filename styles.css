@@ -111,7 +111,7 @@ h2 {
 
 .form-grid {
   display: grid;
-  grid-template-columns: 2fr 0.9fr 1fr 1.2fr;
+  grid-template-columns: 2fr 0.9fr 1.5fr;
   gap: 10px;
 }
 
@@ -164,6 +164,10 @@ select:focus {
   align-items: center;
   gap: 6px;
   padding-top: 30px;
+}
+
+.hidden {
+  display: none !important;
 }
 
 .actions,
@@ -280,6 +284,10 @@ button.primary {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.model-input {
+  width: 100%;
 }
 
 .model-pricing {

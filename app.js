@@ -1,9 +1,15 @@
 const OPENROUTER_CHAT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_MODELS_ENDPOINT = "https://openrouter.ai/api/v1/models";
 const HISTORY_API_ENDPOINT = "/api/config-history";
+const HISTORY_NAMESPACE = "default";
+
+const PROVIDER_OPENROUTER = "openrouter";
+const PROVIDER_CUSTOM = "custom";
+const DEFAULT_CUSTOM_BASE_URL = "https://api.openai.com/v1/chat/completions";
 
 const LS_KEY_API = "or-comparator-api-key";
-const LS_KEY_WORKSPACE = "or-comparator-workspace-id";
+const LS_KEY_PROVIDER = "or-comparator-provider-v1";
+const LS_KEY_CUSTOM_BASE_URL = "or-comparator-custom-base-url-v1";
 const LS_KEY_MODELS_CACHE = "or-comparator-models-cache-v1";
 const LS_KEY_HISTORY_BACKUP = "or-comparator-history-backup-v1";
 const LS_KEY_HISTORY_LEGACY = "or-comparator-config-history-v1";
@@ -27,9 +33,12 @@ const state = {
 };
 
 const el = {
+  providerSelect: document.getElementById("providerSelect"),
+  baseUrlRow: document.getElementById("baseUrlRow"),
+  baseUrlInput: document.getElementById("baseUrlInput"),
+  apiKeyLabel: document.getElementById("apiKeyLabel"),
   apiKeyInput: document.getElementById("apiKeyInput"),
   temperatureInput: document.getElementById("temperatureInput"),
-  workspaceInput: document.getElementById("workspaceInput"),
   rememberKeyInput: document.getElementById("rememberKeyInput"),
   systemPromptInput: document.getElementById("systemPromptInput"),
   outputTokenRatioInput: document.getElementById("outputTokenRatioInput"),
@@ -58,6 +67,16 @@ const el = {
 let rowIdSeed = 1;
 let historySyncQueue = Promise.resolve();
 
+class ApiError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = options.status ?? null;
+    this.code = options.code ?? null;
+    this.detail = options.detail ?? null;
+  }
+}
+
 function createRow(prompt = "") {
   return {
     id: rowIdSeed++,
@@ -82,18 +101,27 @@ function clampTemperature(value) {
   return value;
 }
 
-function sanitizeWorkspaceId(value) {
-  const raw = String(value || "").trim();
-  const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 64);
-  return cleaned || "default";
+function normalizeProvider(value) {
+  return value === PROVIDER_CUSTOM ? PROVIDER_CUSTOM : PROVIDER_OPENROUTER;
 }
 
-function getWorkspaceId() {
-  const normalized = sanitizeWorkspaceId(el.workspaceInput.value);
-  if (el.workspaceInput.value !== normalized) {
-    el.workspaceInput.value = normalized;
+function getHistoryNamespace() {
+  return HISTORY_NAMESPACE;
+}
+
+function isUsingOpenRouter() {
+  return normalizeProvider(el.providerSelect.value) === PROVIDER_OPENROUTER;
+}
+
+function sanitizeBaseUrl(value) {
+  return String(value || "").trim();
+}
+
+function getChatEndpoint() {
+  if (isUsingOpenRouter()) {
+    return OPENROUTER_CHAT_ENDPOINT;
   }
-  return normalized;
+  return sanitizeBaseUrl(el.baseUrlInput.value);
 }
 
 function setStatus(text, type = "normal") {
@@ -270,14 +298,72 @@ function hydrateApiKeyPreference() {
   el.rememberKeyInput.checked = true;
 }
 
-function saveWorkspacePreference() {
-  localStorage.setItem(LS_KEY_WORKSPACE, getWorkspaceId());
+function saveProviderPreference() {
+  localStorage.setItem(LS_KEY_PROVIDER, normalizeProvider(el.providerSelect.value));
 }
 
-function hydrateWorkspacePreference() {
-  const saved = localStorage.getItem(LS_KEY_WORKSPACE);
-  if (!saved) return;
-  el.workspaceInput.value = sanitizeWorkspaceId(saved);
+function hydrateProviderPreference() {
+  const saved = localStorage.getItem(LS_KEY_PROVIDER);
+  el.providerSelect.value = normalizeProvider(saved);
+}
+
+function saveBaseUrlPreference() {
+  const value = sanitizeBaseUrl(el.baseUrlInput.value);
+  if (value) {
+    localStorage.setItem(LS_KEY_CUSTOM_BASE_URL, value);
+    return;
+  }
+  localStorage.removeItem(LS_KEY_CUSTOM_BASE_URL);
+}
+
+function hydrateBaseUrlPreference() {
+  const saved = sanitizeBaseUrl(localStorage.getItem(LS_KEY_CUSTOM_BASE_URL));
+  el.baseUrlInput.value = saved || DEFAULT_CUSTOM_BASE_URL;
+}
+
+function updateProviderUI() {
+  const usingOpenRouter = isUsingOpenRouter();
+
+  if (el.apiKeyLabel) {
+    el.apiKeyLabel.textContent = usingOpenRouter ? "OpenRouter API Key" : "接口 API Key";
+  }
+  el.apiKeyInput.placeholder = usingOpenRouter ? "sk-or-v1-..." : "输入你的 API Key";
+
+  if (el.baseUrlRow) {
+    el.baseUrlRow.classList.toggle("hidden", usingOpenRouter);
+  }
+
+  if (usingOpenRouter) {
+    el.refreshModelsBtn.disabled = state.running;
+    return;
+  }
+
+  el.refreshModelsBtn.disabled = true;
+  setModelMeta("当前是自定义接口模式：请在每个模型列手动输入模型 ID。", "ok");
+}
+
+function handleProviderChanged(options = {}) {
+  const { silent = false } = options;
+  el.providerSelect.value = normalizeProvider(el.providerSelect.value);
+  saveProviderPreference();
+  updateProviderUI();
+
+  clearResults(true);
+  if (isUsingOpenRouter()) {
+    void loadOfficialModels(false);
+    if (!silent) {
+      setStatus("已切换为 OpenRouter 模式", "ok");
+    }
+    return;
+  }
+
+  state.availableModels = [];
+  state.modelSyncedAt = null;
+  renderModelColumns();
+  renderCaseTable();
+  if (!silent) {
+    setStatus("已切换为自定义接口模式，请填写 Base URL 并手动输入模型 ID", "ok");
+  }
 }
 
 function getModelCache() {
@@ -325,6 +411,9 @@ function parseOfficialModels(payload) {
 function normalizeHistoryItem(item) {
   if (!item || typeof item !== "object") return null;
 
+  const provider = normalizeProvider(item.provider);
+  const rawBaseUrl = sanitizeBaseUrl(item.baseUrl);
+
   const selectedModels = Array.isArray(item.selectedModels)
     ? item.selectedModels.map((m) => String(m || "").trim()).filter(Boolean)
     : [];
@@ -345,20 +434,29 @@ function normalizeHistoryItem(item) {
       if (value > 4) return 4;
       return value;
     })(),
+    provider,
+    baseUrl: provider === PROVIDER_CUSTOM ? rawBaseUrl || DEFAULT_CUSTOM_BASE_URL : "",
     systemPrompt: String(item.systemPrompt || ""),
     selectedModels,
     rows,
   };
 }
 
-function readLocalHistoryBackup(workspaceId = getWorkspaceId()) {
+function readLocalHistoryBackup(namespace = getHistoryNamespace()) {
   try {
     const raw = localStorage.getItem(LS_KEY_HISTORY_BACKUP);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        const scoped = Array.isArray(parsed[workspaceId]) ? parsed[workspaceId] : [];
-        return scoped.map(normalizeHistoryItem).filter(Boolean).slice(0, MAX_CONFIG_HISTORY);
+        const scoped = Array.isArray(parsed[namespace]) ? parsed[namespace] : [];
+        if (scoped.length) {
+          return scoped.map(normalizeHistoryItem).filter(Boolean).slice(0, MAX_CONFIG_HISTORY);
+        }
+
+        const merged = Object.values(parsed)
+          .flatMap((items) => (Array.isArray(items) ? items : []))
+          .slice(0, MAX_CONFIG_HISTORY);
+        return merged.map(normalizeHistoryItem).filter(Boolean).slice(0, MAX_CONFIG_HISTORY);
       }
       if (Array.isArray(parsed)) {
         return parsed.map(normalizeHistoryItem).filter(Boolean).slice(0, MAX_CONFIG_HISTORY);
@@ -375,94 +473,115 @@ function readLocalHistoryBackup(workspaceId = getWorkspaceId()) {
   }
 }
 
-function writeLocalHistoryBackup(workspaceId = getWorkspaceId(), items = []) {
-  let allWorkspaces = {};
+function writeLocalHistoryBackup(namespace = getHistoryNamespace(), items = []) {
+  let allNamespaces = {};
   try {
     const raw = localStorage.getItem(LS_KEY_HISTORY_BACKUP);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        allWorkspaces = parsed;
+        allNamespaces = parsed;
       }
     }
   } catch {
-    allWorkspaces = {};
+    allNamespaces = {};
   }
 
-  allWorkspaces[workspaceId] = items;
-  localStorage.setItem(LS_KEY_HISTORY_BACKUP, JSON.stringify(allWorkspaces));
+  allNamespaces[namespace] = items;
+  localStorage.setItem(LS_KEY_HISTORY_BACKUP, JSON.stringify(allNamespaces));
 }
 
-async function fetchRemoteHistory(workspaceId) {
-  const response = await fetch(`${HISTORY_API_ENDPOINT}?workspace=${encodeURIComponent(workspaceId)}`, {
-    method: "GET",
-  });
+async function parseJsonSafely(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+async function requestHistoryApi(url, options) {
+  const response = await fetch(url, options);
+  const payload = await parseJsonSafely(response);
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+    throw new ApiError(`HTTP ${response.status}`, {
+      status: response.status,
+      code: payload?.code ?? null,
+      detail: payload?.detail ?? payload?.error ?? null,
+    });
   }
 
-  const payload = await response.json();
+  return payload ?? {};
+}
+
+async function fetchRemoteHistory(namespace) {
+  const payload = await requestHistoryApi(`${HISTORY_API_ENDPOINT}?workspace=${encodeURIComponent(namespace)}`, {
+    method: "GET",
+  });
   const items = Array.isArray(payload?.items) ? payload.items : [];
   return items.map(normalizeHistoryItem).filter(Boolean).slice(0, MAX_CONFIG_HISTORY);
 }
 
-async function pushRemoteHistory(workspaceId, items) {
-  const response = await fetch(`${HISTORY_API_ENDPOINT}?workspace=${encodeURIComponent(workspaceId)}`, {
+async function pushRemoteHistory(namespace, items) {
+  const payload = await requestHistoryApi(`${HISTORY_API_ENDPOINT}?workspace=${encodeURIComponent(namespace)}`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ items }),
   });
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  const payload = await response.json();
   const saved = Array.isArray(payload?.items) ? payload.items : [];
   return saved.map(normalizeHistoryItem).filter(Boolean).slice(0, MAX_CONFIG_HISTORY);
 }
 
 async function loadConfigHistoryFromServer(options = {}) {
   const { silent = false } = options;
-  const workspaceId = getWorkspaceId();
+  const namespace = getHistoryNamespace();
 
   try {
-    const remoteItems = await fetchRemoteHistory(workspaceId);
+    const remoteItems = await fetchRemoteHistory(namespace);
     state.configHistory = remoteItems;
-    writeLocalHistoryBackup(workspaceId, state.configHistory);
+    writeLocalHistoryBackup(namespace, state.configHistory);
     renderHistoryList();
     if (!silent) {
       setStatus(`已加载服务端历史：${state.configHistory.length} 条`, "ok");
     }
   } catch (error) {
-    state.configHistory = readLocalHistoryBackup(workspaceId);
+    state.configHistory = readLocalHistoryBackup(namespace);
     renderHistoryList();
     if (!silent) {
-      setStatus(`服务端历史加载失败，使用本地兜底：${error instanceof Error ? error.message : String(error)}`, "warn");
+      const isStorageOptional = error instanceof ApiError && error.code === "KV_NOT_CONFIGURED";
+      if (isStorageOptional) {
+        setStatus("当前未配置服务端持久化，已使用浏览器本地历史", "warn");
+      } else {
+        setStatus(`服务端历史加载失败，使用本地兜底：${error instanceof Error ? error.message : String(error)}`, "warn");
+      }
     }
   }
 }
 
 async function persistConfigHistory(options = {}) {
   const { silent = true } = options;
-  const workspaceId = getWorkspaceId();
+  const namespace = getHistoryNamespace();
   state.configHistory = state.configHistory.slice(0, MAX_CONFIG_HISTORY);
-  writeLocalHistoryBackup(workspaceId, state.configHistory);
+  writeLocalHistoryBackup(namespace, state.configHistory);
 
   try {
-    const saved = await pushRemoteHistory(workspaceId, state.configHistory);
+    const saved = await pushRemoteHistory(namespace, state.configHistory);
     state.configHistory = saved;
-    writeLocalHistoryBackup(workspaceId, state.configHistory);
+    writeLocalHistoryBackup(namespace, state.configHistory);
     renderHistoryList();
     if (!silent) {
       setStatus("历史配置已同步到服务端", "ok");
     }
   } catch (error) {
     if (!silent) {
-      setStatus(`历史同步失败：${error instanceof Error ? error.message : String(error)}`, "warn");
+      const isStorageOptional = error instanceof ApiError && error.code === "KV_NOT_CONFIGURED";
+      if (isStorageOptional) {
+        setStatus("当前未配置服务端持久化，配置已保存到浏览器本地", "warn");
+      } else {
+        setStatus(`历史同步失败：${error instanceof Error ? error.message : String(error)}`, "warn");
+      }
     }
   }
 }
@@ -483,12 +602,15 @@ function buildConfigTitle(rows) {
 
 function buildConfigSnapshot() {
   const rows = state.rows.map((row) => ({ prompt: row.prompt }));
+  const provider = normalizeProvider(el.providerSelect.value);
   return {
     id: createSnapshotId(),
     title: buildConfigTitle(rows),
     savedAt: Date.now(),
     temperature: parseTemperature(),
     outputTokenRatio: parseOutputTokenRatio(),
+    provider,
+    baseUrl: provider === PROVIDER_CUSTOM ? sanitizeBaseUrl(el.baseUrlInput.value) : "",
     systemPrompt: el.systemPromptInput.value,
     selectedModels: [...state.selectedModels],
     rows,
@@ -499,6 +621,8 @@ function configSignature(snapshot) {
   return JSON.stringify({
     temperature: snapshot.temperature,
     outputTokenRatio: snapshot.outputTokenRatio,
+    provider: snapshot.provider,
+    baseUrl: snapshot.baseUrl,
     systemPrompt: snapshot.systemPrompt,
     selectedModels: snapshot.selectedModels,
     rows: snapshot.rows.map((r) => r.prompt),
@@ -525,9 +649,10 @@ function renderHistoryList() {
     const modelCount = item.selectedModels.filter(Boolean).length;
     const rowCount = item.rows.length;
     const hasSystemPrompt = item.systemPrompt.trim() ? " · 含 System Prompt" : "";
+    const providerText = item.provider === PROVIDER_CUSTOM ? "自定义接口" : "OpenRouter";
 
     card.querySelector(".history-meta").textContent =
-      `${formatSyncTime(item.savedAt)} · 模型列 ${modelCount} · 轮次 ${rowCount} · T=${item.temperature} · 输出系数 ${item.outputTokenRatio}${hasSystemPrompt}`;
+      `${formatSyncTime(item.savedAt)} · ${providerText} · 模型列 ${modelCount} · 环节 ${rowCount} · T=${item.temperature} · 输出系数 ${item.outputTokenRatio}${hasSystemPrompt}`;
 
     const loadBtn = card.querySelector(".load-history-btn");
     loadBtn.disabled = state.running;
@@ -537,6 +662,14 @@ function renderHistoryList() {
       el.systemPromptInput.value = item.systemPrompt;
       el.temperatureInput.value = String(clampTemperature(Number(item.temperature)));
       el.outputTokenRatioInput.value = String(item.outputTokenRatio ?? 1);
+      el.providerSelect.value = normalizeProvider(item.provider);
+      el.baseUrlInput.value = sanitizeBaseUrl(item.baseUrl) || DEFAULT_CUSTOM_BASE_URL;
+      saveProviderPreference();
+      saveBaseUrlPreference();
+      updateProviderUI();
+      if (isUsingOpenRouter()) {
+        void loadOfficialModels(false);
+      }
       clearResults(true);
       renderModelColumns();
       renderCaseTable();
@@ -611,6 +744,18 @@ function applyAvailableModels(models, syncedAt) {
 }
 
 async function loadOfficialModels(forceNetwork = false) {
+  if (!isUsingOpenRouter()) {
+    state.availableModels = [];
+    state.modelSyncedAt = null;
+    renderModelColumns();
+    renderCaseTable();
+    setModelMeta("当前是自定义接口模式：请在每个模型列手动输入模型 ID。", "ok");
+    if (forceNetwork) {
+      setStatus("自定义接口模式下不提供官方模型列表，请手动输入模型 ID", "warn");
+    }
+    return;
+  }
+
   const cache = getModelCache();
   const now = Date.now();
   const cacheUsable =
@@ -734,6 +879,11 @@ function estimateRunCostByModel(modelId, prompts, systemPromptTokens, outputRati
 function renderCostEstimate() {
   const outputRatio = parseOutputTokenRatio();
 
+  if (!isUsingOpenRouter()) {
+    el.costSummary.textContent = "预估总花费：自定义接口模式暂不自动估算（缺少统一定价来源）";
+    return;
+  }
+
   const selectedModels = getSelectedModels();
   const prompts = state.rows.map((row) => row.prompt.trim()).filter(Boolean);
   const systemPromptTokens = estimateTextTokens(el.systemPromptInput.value);
@@ -769,6 +919,7 @@ function renderCostEstimate() {
 function renderModelColumns() {
   ensureModelColumns();
   el.modelColumns.innerHTML = "";
+  const usingOpenRouter = isUsingOpenRouter();
 
   for (let index = 0; index < state.selectedModels.length; index += 1) {
     const selectedModel = state.selectedModels[index];
@@ -792,49 +943,75 @@ function renderModelColumns() {
     });
 
     const select = card.querySelector(".model-select");
-    select.disabled = state.running;
+    if (usingOpenRouter) {
+      select.disabled = state.running;
 
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "请选择模型";
-    select.appendChild(placeholder);
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "请选择模型";
+      select.appendChild(placeholder);
 
-    for (const model of state.availableModels) {
-      const option = document.createElement("option");
-      option.value = model.id;
-      option.textContent = shortText(model.id, 48);
-      option.title = model.name && model.name !== model.id ? `${model.id} · ${model.name}` : model.id;
-      select.appendChild(option);
+      for (const model of state.availableModels) {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = shortText(model.id, 48);
+        option.title = model.name && model.name !== model.id ? `${model.id} · ${model.name}` : model.id;
+        select.appendChild(option);
+      }
+
+      const existsInAvailable = state.availableModels.some((model) => model.id === selectedModel);
+      if (selectedModel && !existsInAvailable) {
+        const staleOption = document.createElement("option");
+        staleOption.value = selectedModel;
+        staleOption.textContent = `(历史模型) ${shortText(selectedModel, 34)}`;
+        staleOption.title = selectedModel;
+        select.appendChild(staleOption);
+      }
+
+      select.value = selectedModel;
+      select.addEventListener("change", () => {
+        state.selectedModels[index] = select.value;
+        clearResults(true);
+        renderCaseTable();
+        setStatus("模型列已更新，结果已清空", "warn");
+      });
+    } else {
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "model-input";
+      input.placeholder = "手动输入模型 ID，例如 gpt-4o-mini";
+      input.value = selectedModel;
+      input.disabled = state.running;
+      input.addEventListener("blur", () => {
+        const normalized = input.value.trim();
+        input.value = normalized;
+        state.selectedModels[index] = normalized;
+        clearResults(true);
+        renderCaseTable();
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        input.blur();
+      });
+      select.replaceWith(input);
     }
-
-    const existsInAvailable = state.availableModels.some((model) => model.id === selectedModel);
-    if (selectedModel && !existsInAvailable) {
-      const staleOption = document.createElement("option");
-      staleOption.value = selectedModel;
-      staleOption.textContent = `(历史模型) ${shortText(selectedModel, 34)}`;
-      staleOption.title = selectedModel;
-      select.appendChild(staleOption);
-    }
-
-    select.value = selectedModel;
-    select.addEventListener("change", () => {
-      state.selectedModels[index] = select.value;
-      clearResults(true);
-      renderCaseTable();
-      setStatus("模型列已更新，结果已清空", "warn");
-    });
 
     const pricingNode = card.querySelector(".model-pricing");
-    const modelInfo = getModelById(selectedModel);
-    if (modelInfo && Number.isFinite(modelInfo.promptPricePerToken) && Number.isFinite(modelInfo.completionPricePerToken)) {
-      pricingNode.textContent =
-        `输入 ${formatPricePerMillion(modelInfo.promptPricePerToken)} · 输出 ${formatPricePerMillion(
-          modelInfo.completionPricePerToken,
-        )}`;
-    } else if (selectedModel) {
-      pricingNode.textContent = "定价：暂无（可尝试刷新模型列表）";
+    if (!usingOpenRouter) {
+      pricingNode.textContent = "自定义接口：定价不自动获取";
     } else {
-      pricingNode.textContent = "定价：先选择模型";
+      const modelInfo = getModelById(selectedModel);
+      if (modelInfo && Number.isFinite(modelInfo.promptPricePerToken) && Number.isFinite(modelInfo.completionPricePerToken)) {
+        pricingNode.textContent =
+          `输入 ${formatPricePerMillion(modelInfo.promptPricePerToken)} · 输出 ${formatPricePerMillion(
+            modelInfo.completionPricePerToken,
+          )}`;
+      } else if (selectedModel) {
+        pricingNode.textContent = "定价：暂无（可尝试刷新模型列表）";
+      } else {
+        pricingNode.textContent = "定价：先选择模型";
+      }
     }
 
     el.modelColumns.appendChild(card);
@@ -859,7 +1036,7 @@ function renderCaseTableHead() {
   const tr = document.createElement("tr");
 
   const thRound = document.createElement("th");
-  thRound.textContent = "轮次";
+  thRound.textContent = "环节";
   tr.appendChild(thRound);
 
   const thPrompt = document.createElement("th");
@@ -890,7 +1067,7 @@ function renderCaseTableBody() {
 
     const roundTag = document.createElement("div");
     roundTag.className = "round-tag";
-    roundTag.textContent = `Round ${index + 1}`;
+    roundTag.textContent = `环节 ${index + 1}`;
 
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
@@ -899,12 +1076,12 @@ function renderCaseTableBody() {
     removeBtn.disabled = state.running || state.rows.length <= 1;
     removeBtn.addEventListener("click", () => {
       if (state.rows.length <= 1) {
-        setStatus("至少保留一行轮次", "warn");
+        setStatus("至少保留一个环节", "warn");
         return;
       }
       state.rows = state.rows.filter((item) => item.id !== row.id);
       renderCaseTable();
-      setStatus("轮次已删除", "warn");
+      setStatus("环节已删除", "warn");
     });
 
     roundCell.appendChild(roundTag);
@@ -916,7 +1093,7 @@ function renderCaseTableBody() {
 
     const promptInput = document.createElement("textarea");
     promptInput.rows = 3;
-    promptInput.placeholder = `输入第 ${index + 1} 轮 Prompt`;
+    promptInput.placeholder = `输入第 ${index + 1} 个环节 Prompt`;
     promptInput.value = row.prompt;
     promptInput.disabled = state.running;
     promptInput.addEventListener("input", () => {
@@ -944,7 +1121,7 @@ function fillResponseCell(cell, row, modelId) {
   if (!modelId) {
     const p = document.createElement("p");
     p.className = "result-empty";
-    p.textContent = "先在上方选择模型";
+    p.textContent = isUsingOpenRouter() ? "先在上方选择模型" : "先在上方填写模型 ID";
     cell.appendChild(p);
     return;
   }
@@ -989,6 +1166,8 @@ function setBusy(running) {
   el.refreshModelsBtn.disabled = running;
   el.addModelColBtn.disabled = running;
   el.outputTokenRatioInput.disabled = running;
+  el.providerSelect.disabled = running;
+  el.baseUrlInput.disabled = running;
   el.saveConfigBtn.disabled = running;
   el.clearHistoryBtn.disabled = running;
   el.importPromptBtn.disabled = running;
@@ -999,6 +1178,7 @@ function setBusy(running) {
   renderModelColumns();
   renderCaseTableBody();
   renderHistoryList();
+  updateProviderUI();
 }
 
 function buildInitialHistory(systemPrompt) {
@@ -1006,17 +1186,20 @@ function buildInitialHistory(systemPrompt) {
   return [{ role: "system", content: systemPrompt }];
 }
 
-async function requestByModel({ apiKey, modelId, prompt, history, temperature }) {
+async function requestByModel({ apiKey, modelId, prompt, history, temperature, provider, endpoint }) {
   history.push({ role: "user", content: prompt });
   const start = performance.now();
 
   const headers = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
-    "X-Title": "OpenRouter Case Runner",
   };
 
-  if (location.protocol.startsWith("http")) {
+  if (provider === PROVIDER_OPENROUTER) {
+    headers["X-Title"] = "OpenRouter Case Runner";
+  }
+
+  if (provider === PROVIDER_OPENROUTER && location.protocol.startsWith("http")) {
     headers["HTTP-Referer"] = location.origin;
   }
 
@@ -1028,7 +1211,7 @@ async function requestByModel({ apiKey, modelId, prompt, history, temperature })
   };
 
   try {
-    const response = await fetch(OPENROUTER_CHAT_ENDPOINT, {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -1074,20 +1257,32 @@ async function requestByModel({ apiKey, modelId, prompt, history, temperature })
 async function runWorkflow() {
   if (state.running) return;
 
+  const provider = normalizeProvider(el.providerSelect.value);
   const apiKey = el.apiKeyInput.value.trim();
   if (!apiKey) {
-    setStatus("请先填写 OpenRouter API Key", "err");
+    setStatus("请先填写 API Key", "err");
+    return;
+  }
+
+  const endpoint = getChatEndpoint();
+  if (!endpoint) {
+    setStatus("请先填写 Base URL", "err");
+    return;
+  }
+
+  if (!/^https?:\/\//i.test(endpoint)) {
+    setStatus("Base URL 必须以 http:// 或 https:// 开头", "err");
     return;
   }
 
   if (hasDuplicateModels(state.selectedModels)) {
-    setStatus("模型列不能重复，请选择不同模型", "err");
+    setStatus("模型列不能重复，请填写不同模型", "err");
     return;
   }
 
   const selectedModels = getSelectedModels();
   if (!selectedModels.length) {
-    setStatus("请至少选择一个模型列", "err");
+    setStatus(provider === PROVIDER_OPENROUTER ? "请至少选择一个模型列" : "请至少填写一个模型 ID", "err");
     return;
   }
 
@@ -1133,7 +1328,7 @@ async function runWorkflow() {
       continue;
     }
 
-    setStatus(`执行中：第 ${rowIndex + 1}/${state.rows.length} 轮`, "warn");
+    setStatus(`执行中：第 ${rowIndex + 1}/${state.rows.length} 个环节`, "warn");
 
     const roundResults = await Promise.all(
       selectedModels.map((modelId) =>
@@ -1143,6 +1338,8 @@ async function runWorkflow() {
           prompt,
           history: histories[modelId],
           temperature,
+          provider,
+          endpoint,
         }),
       ),
     );
@@ -1164,10 +1361,12 @@ async function runWorkflow() {
 }
 
 function exportJson() {
+  const provider = normalizeProvider(el.providerSelect.value);
   const payload = {
     exportedAt: new Date().toISOString(),
     config: {
-      workspaceId: getWorkspaceId(),
+      provider,
+      baseUrl: provider === PROVIDER_CUSTOM ? sanitizeBaseUrl(el.baseUrlInput.value) : OPENROUTER_CHAT_ENDPOINT,
       temperature: parseTemperature(),
       outputTokenRatio: parseOutputTokenRatio(),
       systemPrompt: el.systemPromptInput.value,
@@ -1219,7 +1418,7 @@ async function handlePromptFileSelected(event) {
     clearResults(true);
     renderCaseTable();
     saveCurrentConfig({ silent: true, source: "auto" });
-    setStatus(`已导入 ${prompts.length} 轮 Prompt：${file.name}`, "ok");
+    setStatus(`已导入 ${prompts.length} 个环节：${file.name}`, "ok");
   } catch (error) {
     setStatus(`读取文件失败：${error instanceof Error ? error.message : String(error)}`, "err");
   }
@@ -1233,12 +1432,7 @@ function addRow() {
 function clearRows() {
   state.rows = [createRow("")];
   renderCaseTableBody();
-  setStatus("已清空轮次，仅保留一行", "ok");
-}
-
-function handleWorkspaceChanged() {
-  saveWorkspacePreference();
-  void loadConfigHistoryFromServer({ silent: false });
+  setStatus("已清空环节，仅保留一行", "ok");
 }
 
 function bindEvents() {
@@ -1256,8 +1450,11 @@ function bindEvents() {
 
   el.rememberKeyInput.addEventListener("change", saveApiKeyPreference);
   el.apiKeyInput.addEventListener("blur", saveApiKeyPreference);
-  el.workspaceInput.addEventListener("blur", handleWorkspaceChanged);
-  el.workspaceInput.addEventListener("change", handleWorkspaceChanged);
+  el.providerSelect.addEventListener("change", () => handleProviderChanged({ silent: false }));
+  el.baseUrlInput.addEventListener("blur", () => {
+    el.baseUrlInput.value = sanitizeBaseUrl(el.baseUrlInput.value);
+    saveBaseUrlPreference();
+  });
   el.systemPromptInput.addEventListener("input", renderCostEstimate);
   el.outputTokenRatioInput.addEventListener("input", renderCostEstimate);
   el.outputTokenRatioInput.addEventListener("blur", () => {
@@ -1268,9 +1465,11 @@ function bindEvents() {
 
 function init() {
   hydrateApiKeyPreference();
-  hydrateWorkspacePreference();
+  hydrateProviderPreference();
+  hydrateBaseUrlPreference();
+  updateProviderUI();
 
-  state.configHistory = readLocalHistoryBackup(getWorkspaceId());
+  state.configHistory = readLocalHistoryBackup(getHistoryNamespace());
   state.rows = [createRow("")];
 
   bindEvents();

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>筑梦岛</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-icon">⛵</span>
+        <h1>筑梦岛</h1>
+      </div>
+      <div class="header-actions">
+        <button id="historyBtn" type="button" class="ghost-btn">历史对话</button>
+        <button id="clearChatBtn" type="button" class="ghost-btn">新建对话</button>
+        <button id="openSettingsBtn" type="button" class="ghost-btn">⚙ 设置</button>
+        <a href="./stats.html" class="ghost-btn" style="text-decoration:none;font-size:.85rem">数据后台</a>
+      </div>
+    </header>
+
+    <main class="chat-main">
+      <div id="chatTimeline" class="chat-timeline"></div>
+
+      <!-- Compare panel floats over the bottom of chat-main -->
+      <section id="comparePanel" class="compare-panel hidden" aria-live="polite">
+        <div class="compare-header">
+          <span class="compare-label">选择更好的回答继续对话</span>
+          <button id="discardTurnBtn" type="button" class="discard-btn">放弃本轮</button>
+        </div>
+        <div class="compare-grid">
+          <article class="response-card" id="cardLeft">
+            <div class="response-card-head">
+              <span id="labelLeft" class="response-tag tag-neutral">左</span>
+              <span id="latencyA" class="response-latency"></span>
+            </div>
+            <div id="responseA" class="response-body"></div>
+            <button id="chooseABtn" type="button" class="choose-btn choose-neutral">选左</button>
+          </article>
+          <article class="response-card" id="cardRight">
+            <div class="response-card-head">
+              <span id="labelRight" class="response-tag tag-neutral">右</span>
+              <span id="latencyB" class="response-latency"></span>
+            </div>
+            <div id="responseB" class="response-body"></div>
+            <button id="chooseBBtn" type="button" class="choose-btn choose-neutral">选右</button>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="composer-zone">
+      <div class="composer">
+        <textarea id="userInput" rows="1"></textarea>
+        <button id="sendBtn" type="button" class="send-btn primary">发送</button>
+      </div>
+      <p id="statusBar" class="status-bar"></p>
+    </footer>
+
+  </div>
+
+  <!-- History drawer -->
+  <aside id="historyPanel" class="history-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <header class="panel-header">
+        <h2>历史对话</h2>
+        <button id="closeHistoryBtn" type="button" class="close-btn" aria-label="关闭">✕</button>
+      </header>
+      <div id="historyList" class="history-list">
+        <p class="history-empty">暂无历史记录</p>
+      </div>
+    </div>
+  </aside>
+  <div id="historyBackdrop" class="settings-backdrop hidden"></div>
+
+  <!-- Session detail modal -->
+  <div id="sessionModal" class="session-modal hidden">
+    <div class="session-modal-inner">
+      <header class="session-modal-header">
+        <div>
+          <h3 id="sessionModalTitle">对话详情</h3>
+          <p id="sessionModalMeta" class="session-modal-meta"></p>
+        </div>
+        <button id="closeSessionModal" type="button" class="close-btn" aria-label="关闭">✕</button>
+      </header>
+      <div id="sessionModalBody" class="session-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Settings drawer -->
+  <aside id="settingsPanel" class="settings-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <header class="panel-header">
+        <h2>对话配置</h2>
+        <button id="closeSettingsBtn" type="button" class="close-btn" aria-label="关闭">✕</button>
+      </header>
+
+      <section class="panel-card">
+        <h3>角色 &amp; 参数</h3>
+        <div class="role-row">
+          <label class="field">
+            <span>角色</span>
+            <select id="roleSelect"></select>
+          </label>
+          <label class="field field-narrow">
+            <span>Temperature</span>
+            <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="0">
+          </label>
+        </div>
+        <div id="rolePreview" class="role-preview"></div>
+        <label class="remember-row">
+          <input id="rememberKeysInput" type="checkbox">
+          <span>记住 API Key（存本地）</span>
+        </label>
+      </section>
+
+      <section class="panel-card">
+        <h3>API 配置</h3>
+        <div class="api-grid">
+          <article class="api-card">
+            <div class="api-card-title"><span class="response-tag tag-a">A</span></div>
+            <label class="field">
+              <span>Base URL</span>
+              <input id="endpointAInput" type="text" autocomplete="off" spellcheck="false" placeholder="https://openrouter.ai/api/v1/chat/completions">
+            </label>
+            <label class="field">
+              <span>API Key</span>
+              <input id="apiKeyAInput" type="password" autocomplete="off" placeholder="sk-...">
+            </label>
+            <label class="field">
+              <span>Model ID</span>
+              <input id="modelAInput" type="text" autocomplete="off" spellcheck="false" placeholder="openai/gpt-4o-mini">
+            </label>
+          </article>
+          <article class="api-card">
+            <div class="api-card-title"><span class="response-tag tag-b">B</span></div>
+            <label class="field">
+              <span>Base URL</span>
+              <input id="endpointBInput" type="text" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1/chat/completions">
+            </label>
+            <label class="field">
+              <span>API Key</span>
+              <input id="apiKeyBInput" type="password" autocomplete="off" placeholder="sk-...">
+            </label>
+            <label class="field">
+              <span>Model ID</span>
+              <input id="modelBInput" type="text" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini">
+            </label>
+          </article>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <div id="settingsBackdrop" class="settings-backdrop hidden"></div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
