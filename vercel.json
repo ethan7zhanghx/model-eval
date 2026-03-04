@@ -1,0 +1,8 @@
+{
+  "outputDirectory": "public",
+  "functions": {
+    "api/llm-proxy.js": {
+      "maxDuration": 60
+    }
+  }
+}
