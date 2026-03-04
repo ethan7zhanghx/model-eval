@@ -119,7 +119,7 @@ function buildSessionPayload() {
 async function persistSession() {
   try {
     const session = buildSessionPayload();
-    localStorage.setItem(LS_KEY_SESSION, state.sessionId);
+    sessionStorage.setItem(LS_KEY_SESSION, state.sessionId);
     await fetch(SESSIONS_API_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -143,7 +143,7 @@ function restoreSession(session) {
     source: m.source,
     time: m.time,
   }));
-  localStorage.setItem(LS_KEY_SESSION, session.id);
+  sessionStorage.setItem(LS_KEY_SESSION, session.id);
   renderTimeline();
   renderComparePanel();
   setBusy(false);
@@ -960,8 +960,8 @@ async function init() {
     await refreshStats({ silent: true });
     persistConfig();
 
-    // 尝试恢复上次对话
-    const lastSessionId = localStorage.getItem(LS_KEY_SESSION);
+    // 尝试恢复本标签页上次对话（sessionStorage，不跨标签页）
+    const lastSessionId = sessionStorage.getItem(LS_KEY_SESSION);
     let restored = false;
     if (lastSessionId) {
       try {
