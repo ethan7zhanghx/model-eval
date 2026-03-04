@@ -5,7 +5,17 @@ const ROLES_DATA_URL = "./roles.json";
 
 const LS_KEY_CONFIG = "zhumengdao-dual-chat-config-v2";
 const LS_KEY_SESSION = "zhumengdao-last-session-id";
+const LS_KEY_DEVICE = "zhumengdao-device-id";
 const MAX_STATS_RECORDS = 1000;
+
+function getDeviceId() {
+  let id = localStorage.getItem(LS_KEY_DEVICE);
+  if (!id) {
+    id = "dev-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem(LS_KEY_DEVICE, id);
+  }
+  return id;
+}
 
 const DEFAULT_CONFIG = {
   endpointA: "https://openrouter.ai/api/v1/chat/completions",
@@ -112,6 +122,7 @@ function buildSessionPayload() {
       endpointHostB: parseHost(config.endpointB),
     },
     turnCount: state.turnOrder,
+    deviceId: getDeviceId(),
     messages: state.history.map((m) => ({ role: m.role, content: m.content, source: m.source, time: m.time })),
   };
 }
@@ -225,7 +236,7 @@ async function openHistoryPanel() {
   setHistoryOpen(true);
   el.historyList.innerHTML = `<p class="history-empty">加载中...</p>`;
   try {
-    const res = await fetch(`${SESSIONS_API_ENDPOINT}?limit=200`);
+    const res = await fetch(`${SESSIONS_API_ENDPOINT}?limit=200&deviceId=${encodeURIComponent(getDeviceId())}`);
     const data = await res.json();
     const sessions = Array.isArray(data.sessions) ? data.sessions : [];
     renderHistoryList(sessions);

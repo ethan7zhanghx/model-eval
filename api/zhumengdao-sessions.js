@@ -84,6 +84,7 @@ function normalizeSession(item) {
       endpointHostB: toSafeString(config.endpointHostB, 200),
     },
     turnCount: Math.max(0, Math.floor(toSafeNumber(item.turnCount) || 0)),
+    deviceId: toSafeString(item.deviceId, 120),
     messages,
   };
 }
@@ -119,6 +120,7 @@ module.exports = async function handler(req, res) {
     if (req.method === "GET") {
       const urlObj = new URL(req.url, `http://${req.headers.host || "localhost"}`);
       const id = urlObj.searchParams.get("id");
+      const deviceId = urlObj.searchParams.get("deviceId") || "";
       const sessions = await readSessions();
 
       if (id) {
@@ -129,7 +131,8 @@ module.exports = async function handler(req, res) {
       }
 
       const limit = sanitizeLimit(urlObj.searchParams.get("limit") || "200");
-      sendJson(res, 200, { sessions: sessions.slice(0, limit), total: sessions.length });
+      const filtered = deviceId ? sessions.filter((s) => s.deviceId === deviceId) : sessions;
+      sendJson(res, 200, { sessions: filtered.slice(0, limit), total: filtered.length });
       return;
     }
 
