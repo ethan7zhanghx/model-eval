@@ -499,6 +499,7 @@ function createMessageNode(message) {
 
 function renderTimeline() {
   el.chatTimeline.innerHTML = "";
+  updateSettingsLock();
   const rows = [...state.history];
 
   if (!rows.length && !state.loading) {
@@ -565,12 +566,22 @@ function renderComparePanel() {
   });
 }
 
+function updateSettingsLock() {
+  const started = state.history.length > 0 || !!state.pendingTurn;
+  el.roleSelect.disabled = started;
+  el.temperatureInput.disabled = started;
+  if (el.rolePreview) {
+    el.rolePreview.style.opacity = started ? "0.5" : "";
+  }
+}
+
 function setBusy(busy) {
   state.busy = busy;
   const locked = busy || !state.storageReady;
   el.sendBtn.disabled = locked || !!state.pendingTurn;
   el.clearChatBtn.disabled = locked;
   el.userInput.disabled = locked;
+  updateSettingsLock();
   renderComparePanel();
 }
 
