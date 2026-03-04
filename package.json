@@ -5,7 +5,7 @@
   "description": "OpenRouter multi-model multi-round case comparison tool",
   "type": "commonjs",
   "scripts": {
-    "build": "rm -rf public && mkdir -p public public/zhumengdao && cp index.html app.js styles.css public/ && cp zhumengdao/index.html zhumengdao/app.js zhumengdao/styles.css zhumengdao/roles.json zhumengdao/stats.html public/zhumengdao/",
+    "build": "rm -rf public && mkdir -p public public/zhumengdao && cp index.html app.js styles.css under-construction.html public/ && cp zhumengdao/index.html zhumengdao/app.js zhumengdao/styles.css zhumengdao/roles.json zhumengdao/stats.html public/zhumengdao/",
     "dev": "node server.js",
     "start": "node server.js",
     "check": "node --check app.js && node --check server.js && node --check api/config-history.js && node --check api/zhumengdao-records.js && node --check api/zhumengdao-sessions.js && node --check api/llm-proxy.js && node --check zhumengdao/app.js"
