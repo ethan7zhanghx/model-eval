@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenRouter 多模型对比台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="bg-glow glow-a"></div>
+  <div class="bg-glow glow-b"></div>
+
+  <main class="container">
+    <header class="hero">
+      <p class="eyebrow">OpenRouter Case Runner</p>
+      <h1>多模型多轮 Case 对比</h1>
+      <p class="subtitle">模型从 OpenRouter 官方模型库加载，按表格轮次一次执行完整流程。</p>
+    </header>
+
+    <section class="panel config-panel">
+      <h2>全局配置</h2>
+      <div class="form-grid">
+        <label>
+          <span>OpenRouter API Key</span>
+          <input id="apiKeyInput" type="password" placeholder="sk-or-v1-..." autocomplete="off">
+        </label>
+
+        <label>
+          <span>Temperature</span>
+          <input id="temperatureInput" type="number" value="0" min="0" max="2" step="0.1">
+        </label>
+
+        <label>
+          <span>历史空间 ID</span>
+          <input id="workspaceInput" type="text" value="default" placeholder="default" autocomplete="off">
+        </label>
+
+        <label class="checkbox-row">
+          <input id="rememberKeyInput" type="checkbox">
+          <span>记住 API Key（浏览器本地缓存）</span>
+        </label>
+
+        <label class="full-span">
+          <span>System Prompt（全流程生效）</span>
+          <textarea id="systemPromptInput" rows="4"></textarea>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button id="runWorkflowBtn" class="primary">执行完整流程</button>
+        <button id="clearResultsBtn">清空结果</button>
+        <button id="exportBtn">导出 JSON</button>
+      </div>
+      <div class="cost-estimate-row">
+        <label class="cost-estimate-input">
+          <span>输出 Token 估算系数</span>
+          <input id="outputTokenRatioInput" type="number" value="1.0" min="0.1" max="4" step="0.1">
+        </label>
+        <p id="costSummary" class="status">预估总花费：等待输入 Prompt 与模型</p>
+      </div>
+      <p id="statusBar" class="status">等待开始</p>
+    </section>
+
+    <section class="panel model-panel">
+      <div class="panel-head">
+        <h2>模型列配置</h2>
+        <div class="actions-inline">
+          <button id="refreshModelsBtn">刷新官方模型列表</button>
+          <button id="addModelColBtn" class="primary">添加模型列</button>
+        </div>
+      </div>
+      <p id="modelMeta" class="hint">正在加载官方模型列表...</p>
+      <div id="modelColumns" class="model-columns"></div>
+    </section>
+
+    <section class="panel history-panel">
+      <div class="panel-head">
+        <h2>配置历史</h2>
+        <div class="actions-inline">
+          <button id="saveConfigBtn" class="primary">保存当前配置</button>
+          <button id="clearHistoryBtn">清空历史</button>
+        </div>
+      </div>
+      <p class="hint">保存模型列、System Prompt、Temperature、轮次 Prompt。</p>
+      <div id="historyList" class="history-list"></div>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="panel-head">
+        <h2>轮次 Case 表</h2>
+        <div class="actions-inline">
+          <button id="importPromptBtn">导入 md/txt</button>
+          <button id="addRowBtn" class="primary">新增轮次</button>
+          <button id="clearRowsBtn">清空轮次</button>
+        </div>
+      </div>
+      <input id="promptFileInput" type="file" accept=".md,.txt,text/markdown,text/plain" hidden>
+      <p class="hint">导入规则：优先按 `---` 分段；否则按 Markdown 标题分段；再按空行分段。</p>
+
+      <div class="table-wrap">
+        <table id="caseTable">
+          <thead id="caseTableHead"></thead>
+          <tbody id="caseTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <template id="modelColumnTemplate">
+    <article class="model-column-card">
+      <div class="model-column-head">
+        <strong class="model-column-title"></strong>
+        <button class="small-btn remove-col-btn" type="button">移除</button>
+      </div>
+      <select class="model-select"></select>
+      <p class="model-pricing"></p>
+    </article>
+  </template>
+
+  <template id="historyItemTemplate">
+    <article class="history-item">
+      <div class="history-main">
+        <strong class="history-title"></strong>
+        <p class="history-meta"></p>
+      </div>
+      <div class="actions-inline">
+        <button type="button" class="small-btn load-history-btn">载入</button>
+        <button type="button" class="small-btn delete-history-btn">删除</button>
+      </div>
+    </article>
+  </template>
+
+  <script src="./app.js"></script>
+</body>
+</html>
