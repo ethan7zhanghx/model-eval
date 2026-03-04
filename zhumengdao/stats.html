@@ -154,9 +154,16 @@
           </select>
         </div>
       </div>
-      <div class="sessions-list" id="sessionsList">
-        <p class="empty-state">加载中...</p>
+      <!-- 密码锁 -->
+      <div id="authWall" style="padding:32px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px">
+        <p style="margin:0;font-size:.88rem;color:var(--text-soft)">对话记录需要管理员密码</p>
+        <div style="display:flex;gap:8px;max-width:320px;width:100%">
+          <input id="adminPasswordInput" type="password" placeholder="输入密码" style="flex:1;font:inherit;padding:8px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);outline:none">
+          <button id="adminLoginBtn" style="font:inherit;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;font-weight:600">确认</button>
+        </div>
+        <p id="authError" style="margin:0;font-size:.8rem;color:var(--err);min-height:1em"></p>
       </div>
+      <div class="sessions-list" id="sessionsList" style="display:none"></div>
     </div>
   </div>
 
@@ -501,34 +508,72 @@
       document.getElementById("dialogOverlay").classList.remove("hidden");
     }
 
+    const ADMIN_AUTH_API = "/api/admin-auth";
+    let isAuthed = sessionStorage.getItem("zmd-admin-authed") === "1";
+
+    async function tryLogin() {
+      const pw = document.getElementById("adminPasswordInput").value;
+      const errEl = document.getElementById("authError");
+      errEl.textContent = "";
+      if (!pw) { errEl.textContent = "请输入密码"; return; }
+      try {
+        const res = await fetch(ADMIN_AUTH_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pw }),
+        });
+        if (res.ok) {
+          sessionStorage.setItem("zmd-admin-authed", "1");
+          isAuthed = true;
+          document.getElementById("authWall").style.display = "none";
+          document.getElementById("sessionsList").style.display = "";
+          await loadSessions();
+        } else {
+          const data = await res.json().catch(() => ({}));
+          errEl.textContent = data.error || "密码错误";
+        }
+      } catch (e) {
+        errEl.textContent = "请求失败：" + e.message;
+      }
+    }
+
     // ── 加载 ──────────────────────────────────────────────
+    async function loadSessions() {
+      try {
+        const sesRes = await fetch(`${SESSIONS_API}?limit=1000`);
+        const sesData = await sesRes.json();
+        allSessions = Array.isArray(sesData.sessions) ? sesData.sessions : [];
+        allSessions.sort((a, b) => b.createdAt - a.createdAt);
+        const summaries = buildSessionSummaries();
+        populateRoleFilter(summaries);
+        renderSessionsList(summaries);
+      } catch (e) {
+        document.getElementById("sessionsList").innerHTML =
+          `<p class="empty-state" style="color:var(--err)">加载失败：${e.message}</p>`;
+      }
+    }
+
     async function load() {
       document.getElementById("lastUpdated").textContent = "加载中...";
       try {
-        const [recRes, sesRes] = await Promise.all([
-          fetch(`${RECORDS_API}?limit=2000`),
-          fetch(`${SESSIONS_API}?limit=1000`),
-        ]);
+        const recRes = await fetch(`${RECORDS_API}?limit=2000`);
         const recData = await recRes.json();
-        const sesData = await sesRes.json();
-
         allRecords = Array.isArray(recData.items) ? recData.items : [];
-        allSessions = Array.isArray(sesData.sessions) ? sesData.sessions : [];
-
-        // Sort sessions newest first
-        allSessions.sort((a, b) => b.createdAt - a.createdAt);
 
         const stats = buildMatchStats(allRecords);
         renderKpi(stats);
         renderRanking(stats);
         renderMatrix(stats);
 
-        const summaries = buildSessionSummaries();
-        populateRoleFilter(summaries);
-        renderSessionsList(summaries);
-
         document.getElementById("lastUpdated").textContent =
           `更新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
+
+        // 如果已认证，直接加载 sessions
+        if (isAuthed) {
+          document.getElementById("authWall").style.display = "none";
+          document.getElementById("sessionsList").style.display = "";
+          await loadSessions();
+        }
       } catch (e) {
         document.getElementById("lastUpdated").textContent = "加载失败";
         document.getElementById("sessionsList").innerHTML =
@@ -551,6 +596,10 @@
     document.getElementById("refreshBtn").addEventListener("click", load);
     document.getElementById("exportBtn").addEventListener("click", exportRecords);
     document.getElementById("filterRole").addEventListener("change", applyFilters);
+    document.getElementById("adminLoginBtn").addEventListener("click", tryLogin);
+    document.getElementById("adminPasswordInput").addEventListener("keydown", e => {
+      if (e.key === "Enter") tryLogin();
+    });
     document.getElementById("dialogClose").addEventListener("click", () => {
       document.getElementById("dialogOverlay").classList.add("hidden");
     });
