@@ -192,6 +192,24 @@ function normalizeContent(content) {
   return "(empty response)";
 }
 
+function extractContentText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && typeof part.text === "string") return part.text;
+        return JSON.stringify(part);
+      })
+      .join("\n");
+  }
+  if (content && typeof content === "object") {
+    if (typeof content.text === "string") return content.text;
+    return JSON.stringify(content, null, 2);
+  }
+  return "";
+}
+
 function sanitizeEndpoint(value) { return String(value || "").trim(); }
 function sanitizeModel(value) { return String(value || "").trim(); }
 function sanitizeKey(value) { return String(value || "").trim(); }
@@ -277,6 +295,29 @@ function escapeHtml(str) {
   return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function toFiniteNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toNonNegativeInt(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.round(parsed);
+}
+
+function formatPerfText(meta) {
+  if (!meta || typeof meta !== "object") return "";
+  const parts = [];
+  const latencyMs = toFiniteNumber(meta.latencyMs);
+  const ttftMs = toFiniteNumber(meta.ttftMs);
+  const tps = toFiniteNumber(meta.tps);
+  if (latencyMs != null) parts.push(`${Math.round(latencyMs)}ms`);
+  if (ttftMs != null) parts.push(`TTFT ${Math.round(ttftMs)}ms`);
+  if (tps != null) parts.push(`TPS ${tps.toFixed(2)}`);
+  return parts.join(" · ");
+}
+
 async function openSessionDetail(sessionId) {
   el.sessionModal.classList.remove("hidden");
   el.sessionModalBody.innerHTML = `<p style="color:var(--text-soft);text-align:center;padding:32px">加载中...</p>`;
@@ -346,7 +387,7 @@ function renderSessionDetail(session, turnRecords) {
           <div class="detail-response-head">
             <span class="response-tag tag-a">A</span>
             <span class="detail-model">${escapeHtml(rec.apiA?.model || "")}</span>
-            <span class="response-latency">${rec.apiA?.latencyMs ? rec.apiA.latencyMs + "ms" : ""}</span>
+            <span class="response-latency">${escapeHtml(formatPerfText(rec.apiA))}</span>
             ${selectedA ? `<span class="detail-chosen-badge">✓ 已选</span>` : ""}
           </div>
           <div class="detail-response-body">${escapeHtml(rec.apiA?.content || "（无内容）")}</div>
@@ -355,7 +396,7 @@ function renderSessionDetail(session, turnRecords) {
           <div class="detail-response-head">
             <span class="response-tag tag-b">B</span>
             <span class="detail-model">${escapeHtml(rec.apiB?.model || "")}</span>
-            <span class="response-latency">${rec.apiB?.latencyMs ? rec.apiB.latencyMs + "ms" : ""}</span>
+            <span class="response-latency">${escapeHtml(formatPerfText(rec.apiB))}</span>
             ${selectedB ? `<span class="detail-chosen-badge">✓ 已选</span>` : ""}
           </div>
           <div class="detail-response-body">${escapeHtml(rec.apiB?.content || "（无内容）")}</div>
@@ -564,8 +605,8 @@ function renderComparePanel() {
   const [leftSrc, rightSrc] = pending.displayOrder;
   el.responseA.textContent = pending.responses[leftSrc].content;
   el.responseB.textContent = pending.responses[rightSrc].content;
-  if (el.latencyA) el.latencyA.textContent = pending.responses[leftSrc].latencyMs ? `${pending.responses[leftSrc].latencyMs}ms` : "";
-  if (el.latencyB) el.latencyB.textContent = pending.responses[rightSrc].latencyMs ? `${pending.responses[rightSrc].latencyMs}ms` : "";
+  if (el.latencyA) el.latencyA.textContent = formatPerfText(pending.responses[leftSrc]);
+  if (el.latencyB) el.latencyB.textContent = formatPerfText(pending.responses[rightSrc]);
   el.chooseABtn.disabled = state.busy || !pending.responses[leftSrc].ok;
   el.chooseBBtn.disabled = state.busy || !pending.responses[rightSrc].ok;
   el.discardTurnBtn.disabled = state.busy;
@@ -698,6 +739,97 @@ async function refreshStats(options = {}) {
   setBusy(false);
 }
 
+function estimateTokensFromText(text) {
+  const raw = String(text || "");
+  if (!raw) return 0;
+  const cjk = (raw.match(/[\u3400-\u9fff]/g) || []).length;
+  const other = raw.length - cjk;
+  const estimated = cjk + other / 4;
+  return Math.max(1, Math.round(estimated));
+}
+
+function splitSseEvents(buffer) {
+  const events = [];
+  const matcher = /\r?\n\r?\n/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = matcher.exec(buffer)) !== null) {
+    events.push(buffer.slice(lastIndex, match.index));
+    lastIndex = matcher.lastIndex;
+  }
+  return { events, rest: buffer.slice(lastIndex) };
+}
+
+function getSseEventData(rawEvent) {
+  const lines = String(rawEvent || "").split(/\r?\n/);
+  const dataLines = [];
+  for (const line of lines) {
+    if (!line.startsWith("data:")) continue;
+    dataLines.push(line.slice(5).trimStart());
+  }
+  return dataLines.join("\n").trim();
+}
+
+function extractDeltaText(chunk) {
+  const choice = Array.isArray(chunk?.choices) ? chunk.choices[0] : null;
+  if (!choice || typeof choice !== "object") return "";
+
+  const delta = choice.delta && typeof choice.delta === "object" ? choice.delta : null;
+  if (typeof delta?.content === "string") return delta.content;
+  if (Array.isArray(delta?.content)) {
+    return delta.content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && typeof part.text === "string") return part.text;
+        return "";
+      })
+      .join("");
+  }
+
+  if (typeof choice.text === "string") return choice.text;
+
+  const message = choice.message && typeof choice.message === "object" ? choice.message : null;
+  if (typeof message?.content === "string") return message.content;
+  if (Array.isArray(message?.content)) {
+    return message.content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && typeof part.text === "string") return part.text;
+        return "";
+      })
+      .join("");
+  }
+
+  return "";
+}
+
+function extractCompletionTokens(chunk) {
+  const candidates = [
+    chunk?.usage?.completion_tokens,
+    chunk?.completion_tokens,
+    chunk?.metrics?.completion_tokens,
+  ];
+  for (const value of candidates) {
+    const parsed = toNonNegativeInt(value);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
+function buildFailedResult(sourceTag, latencyMs, content) {
+  return {
+    ok: false,
+    sourceTag,
+    latencyMs,
+    ttftMs: null,
+    tps: null,
+    outputTokens: null,
+    outputChars: 0,
+    tokenSource: "none",
+    content,
+  };
+}
+
 async function requestOne({ endpoint, apiKey, model, messages, temperature, sourceTag }) {
   const start = performance.now();
   try {
@@ -707,17 +839,164 @@ async function requestOne({ endpoint, apiKey, model, messages, temperature, sour
       body: JSON.stringify({
         endpoint,
         apiKey,
-        payload: { model, messages, temperature, stream: false, enable_thinking: false },
+        payload: {
+          model,
+          messages,
+          temperature,
+          stream: true,
+          stream_options: { include_usage: true },
+          enable_thinking: false,
+        },
       }),
     });
-    const payload = await response.json().catch(() => ({}));
-    const latencyMs = Math.round(performance.now() - start);
+
+    const latencyNow = () => Math.round(performance.now() - start);
+
     if (!response.ok) {
-      return { ok: false, sourceTag, latencyMs, content: `请求失败(${response.status})：${payload?.error?.message ?? payload?.error ?? "未知错误"}` };
+      const raw = await response.text().catch(() => "");
+      let detail = raw;
+      try {
+        const parsed = raw ? JSON.parse(raw) : {};
+        detail = parsed?.error?.message ?? parsed?.error ?? parsed?.detail ?? raw;
+      } catch {
+        // keep raw detail
+      }
+      return buildFailedResult(sourceTag, latencyNow(), `请求失败(${response.status})：${detail || "未知错误"}`);
     }
-    return { ok: true, sourceTag, latencyMs, content: normalizeContent(payload?.choices?.[0]?.message?.content) };
+
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+
+    // Fallback for providers that ignore stream=true and return a normal JSON payload.
+    if (!contentType.includes("text/event-stream") || !response.body) {
+      const payload = await response.json().catch(() => ({}));
+      const rawContent = extractContentText(payload?.choices?.[0]?.message?.content);
+      const content = rawContent || "(empty response)";
+      const latencyMs = latencyNow();
+      const usageTokens = extractCompletionTokens(payload);
+      const outputTokens = usageTokens != null
+        ? usageTokens
+        : rawContent ? estimateTokensFromText(rawContent) : 0;
+      const tokenSource = usageTokens != null ? "usage" : (rawContent ? "estimated" : "none");
+      const seconds = Math.max(0.001, latencyMs / 1000);
+      return {
+        ok: true,
+        sourceTag,
+        latencyMs,
+        ttftMs: null,
+        tps: outputTokens > 0 ? Number((outputTokens / seconds).toFixed(2)) : null,
+        outputTokens,
+        outputChars: rawContent.length,
+        tokenSource,
+        content,
+      };
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let doneSeen = false;
+    let content = "";
+    let firstTokenAt = null;
+    let completionTokens = null;
+    let tokenSource = "none";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = splitSseEvents(buffer);
+      buffer = rest;
+
+      for (const event of events) {
+        const data = getSseEventData(event);
+        if (!data) continue;
+        if (data === "[DONE]") {
+          doneSeen = true;
+          break;
+        }
+
+        let parsed = null;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        const deltaText = extractDeltaText(parsed);
+        if (deltaText) {
+          if (firstTokenAt == null) firstTokenAt = performance.now();
+          content += deltaText;
+        }
+        const usageTokens = extractCompletionTokens(parsed);
+        if (usageTokens != null) {
+          completionTokens = usageTokens;
+          tokenSource = "usage";
+        }
+      }
+
+      if (doneSeen) {
+        await reader.cancel().catch(() => {});
+        break;
+      }
+    }
+
+    if (buffer.trim()) {
+      const lastData = getSseEventData(buffer);
+      if (lastData && lastData !== "[DONE]") {
+        try {
+          const parsed = JSON.parse(lastData);
+          const deltaText = extractDeltaText(parsed);
+          if (deltaText) {
+            if (firstTokenAt == null) firstTokenAt = performance.now();
+            content += deltaText;
+          }
+          const usageTokens = extractCompletionTokens(parsed);
+          if (usageTokens != null) {
+            completionTokens = usageTokens;
+            tokenSource = "usage";
+          }
+        } catch {
+          // ignore trailing fragment
+        }
+      }
+    }
+
+    const rawContent = content;
+    content = rawContent || "(empty response)";
+    const latencyMs = latencyNow();
+    const ttftMs = firstTokenAt == null ? null : Math.round(firstTokenAt - start);
+    let outputTokens = completionTokens;
+    if (outputTokens == null && rawContent) {
+      outputTokens = estimateTokensFromText(rawContent);
+      tokenSource = "estimated";
+    }
+    if (!rawContent) {
+      outputTokens = outputTokens ?? 0;
+    }
+
+    let tps = null;
+    if (outputTokens != null && outputTokens > 0) {
+      const generateMs = ttftMs != null ? Math.max(1, latencyMs - ttftMs) : Math.max(1, latencyMs);
+      tps = Number((outputTokens / (generateMs / 1000)).toFixed(2));
+    }
+
+    return {
+      ok: true,
+      sourceTag,
+      latencyMs,
+      ttftMs,
+      tps,
+      outputTokens,
+      outputChars: rawContent.length,
+      tokenSource,
+      content,
+    };
   } catch (error) {
-    return { ok: false, sourceTag, latencyMs: Math.round(performance.now() - start), content: `网络异常：${error instanceof Error ? error.message : String(error)}` };
+    return buildFailedResult(
+      sourceTag,
+      Math.round(performance.now() - start),
+      `网络异常：${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 
@@ -748,6 +1027,11 @@ function buildTurnRecord(action, selected = "") {
       model: config.modelA,
       ok: state.pendingTurn.responses.a.ok,
       latencyMs: state.pendingTurn.responses.a.latencyMs,
+      ttftMs: state.pendingTurn.responses.a.ttftMs,
+      tps: state.pendingTurn.responses.a.tps,
+      outputTokens: state.pendingTurn.responses.a.outputTokens,
+      outputChars: state.pendingTurn.responses.a.outputChars,
+      tokenSource: state.pendingTurn.responses.a.tokenSource,
       content: state.pendingTurn.responses.a.content,
     },
     apiB: {
@@ -755,6 +1039,11 @@ function buildTurnRecord(action, selected = "") {
       model: config.modelB,
       ok: state.pendingTurn.responses.b.ok,
       latencyMs: state.pendingTurn.responses.b.latencyMs,
+      ttftMs: state.pendingTurn.responses.b.ttftMs,
+      tps: state.pendingTurn.responses.b.tps,
+      outputTokens: state.pendingTurn.responses.b.outputTokens,
+      outputChars: state.pendingTurn.responses.b.outputChars,
+      tokenSource: state.pendingTurn.responses.b.tokenSource,
       content: state.pendingTurn.responses.b.content,
     },
   };

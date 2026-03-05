@@ -1,3 +1,5 @@
+const { Readable } = require("node:stream");
+
 const PROXY_TIMEOUT_MS = 60000;
 
 const ALLOWED_HOSTS = [
@@ -77,12 +79,32 @@ module.exports = async function handler(req, res) {
       body: JSON.stringify(llmPayload),
       signal: controller.signal,
     });
-    clearTimeout(timer);
+
+    const contentType = upstream.headers.get("content-type") || "application/json; charset=utf-8";
+    res.statusCode = upstream.status;
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "no-store");
+
+    const wantsStream = !!llmPayload?.stream;
+    if (wantsStream && upstream.body) {
+      res.setHeader("X-Accel-Buffering", "no");
+      const upstreamStream = Readable.fromWeb(upstream.body);
+      upstreamStream.on("error", () => {
+        clearTimeout(timer);
+        if (!res.writableEnded) res.end();
+      });
+      upstreamStream.on("end", () => {
+        clearTimeout(timer);
+      });
+      upstreamStream.on("close", () => {
+        clearTimeout(timer);
+      });
+      upstreamStream.pipe(res);
+      return;
+    }
 
     const upstreamBody = await upstream.text();
-    res.statusCode = upstream.status;
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("Cache-Control", "no-store");
+    clearTimeout(timer);
     res.end(upstreamBody);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

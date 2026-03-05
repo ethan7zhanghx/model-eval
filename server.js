@@ -1,6 +1,7 @@
 const http = require("node:http");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const { Readable } = require("node:stream");
 
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -114,6 +115,18 @@ function toSafeNumber(value) {
   return parsed;
 }
 
+function toSafeNonNegativeNumber(value) {
+  const parsed = toSafeNumber(value);
+  if (parsed == null || parsed < 0) return null;
+  return parsed;
+}
+
+function toSafeNonNegativeInt(value) {
+  const parsed = toSafeNonNegativeNumber(value);
+  if (parsed == null) return null;
+  return Math.round(parsed);
+}
+
 function normalizeZmdAction(value) {
   const action = toSafeString(value, 40) || "unknown";
   if (["vote", "discard", "clear", "unknown"].includes(action)) return action;
@@ -161,6 +174,14 @@ function normalizeZmdRecord(item) {
       model: toSafeString(apiA.model, 200),
       ok: !!apiA.ok,
       latencyMs: toSafeNumber(apiA.latencyMs),
+      ttftMs: toSafeNonNegativeNumber(apiA.ttftMs),
+      tps: toSafeNonNegativeNumber(apiA.tps),
+      outputTokens: toSafeNonNegativeInt(apiA.outputTokens),
+      outputChars: toSafeNonNegativeInt(apiA.outputChars),
+      tokenSource: (() => {
+        const source = toSafeString(apiA.tokenSource, 20) || "none";
+        return ["usage", "estimated", "none"].includes(source) ? source : "none";
+      })(),
       content: toSafeText(apiA.content, 50000),
     },
     apiB: {
@@ -168,6 +189,14 @@ function normalizeZmdRecord(item) {
       model: toSafeString(apiB.model, 200),
       ok: !!apiB.ok,
       latencyMs: toSafeNumber(apiB.latencyMs),
+      ttftMs: toSafeNonNegativeNumber(apiB.ttftMs),
+      tps: toSafeNonNegativeNumber(apiB.tps),
+      outputTokens: toSafeNonNegativeInt(apiB.outputTokens),
+      outputChars: toSafeNonNegativeInt(apiB.outputChars),
+      tokenSource: (() => {
+        const source = toSafeString(apiB.tokenSource, 20) || "none";
+        return ["usage", "estimated", "none"].includes(source) ? source : "none";
+      })(),
       content: toSafeText(apiB.content, 50000),
     },
   };
@@ -179,9 +208,30 @@ function buildZmdSummary(items) {
   let discardCount = 0;
   let aWins = 0;
   let bWins = 0;
+  let perfSamples = 0;
+  let ttftSamples = 0;
+  let tpsSamples = 0;
+  let ttftSum = 0;
+  let tpsSum = 0;
 
   for (const item of items) {
     if (item.sessionId) sessions.add(item.sessionId);
+
+    const responses = [item.apiA, item.apiB];
+    for (const api of responses) {
+      if (!api || !api.ok) continue;
+      perfSamples += 1;
+      const ttft = toSafeNonNegativeNumber(api.ttftMs);
+      if (ttft != null) {
+        ttftSum += ttft;
+        ttftSamples += 1;
+      }
+      const tps = toSafeNonNegativeNumber(api.tps);
+      if (tps != null) {
+        tpsSum += tps;
+        tpsSamples += 1;
+      }
+    }
 
     if (item.action === "vote") {
       voteCount += 1;
@@ -204,6 +254,11 @@ function buildZmdSummary(items) {
     bWins,
     aWinRate: voteCount ? Number((aWins / voteCount).toFixed(4)) : 0,
     bWinRate: voteCount ? Number((bWins / voteCount).toFixed(4)) : 0,
+    perfSamples,
+    ttftSamples,
+    tpsSamples,
+    avgTtftMs: ttftSamples ? Number((ttftSum / ttftSamples).toFixed(2)) : null,
+    avgTps: tpsSamples ? Number((tpsSum / tpsSamples).toFixed(2)) : null,
   };
 }
 
@@ -455,10 +510,32 @@ async function handleLlmProxy(req, res) {
       body: JSON.stringify(llmPayload),
       signal: controller.signal,
     });
-    clearTimeout(timer);
+
+    const contentType = upstream.headers.get("content-type") || "application/json; charset=utf-8";
+    res.statusCode = upstream.status;
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "no-store");
+
+    const wantsStream = !!llmPayload?.stream;
+    if (wantsStream && upstream.body) {
+      res.setHeader("X-Accel-Buffering", "no");
+      const upstreamStream = Readable.fromWeb(upstream.body);
+      upstreamStream.on("error", () => {
+        clearTimeout(timer);
+        if (!res.writableEnded) res.end();
+      });
+      upstreamStream.on("end", () => {
+        clearTimeout(timer);
+      });
+      upstreamStream.on("close", () => {
+        clearTimeout(timer);
+      });
+      upstreamStream.pipe(res);
+      return;
+    }
 
     const upstreamBody = await upstream.text();
-    res.writeHead(upstream.status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    clearTimeout(timer);
     res.end(upstreamBody);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

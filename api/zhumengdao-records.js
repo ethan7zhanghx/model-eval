@@ -63,6 +63,18 @@ function toSafeNumber(value) {
   return parsed;
 }
 
+function toSafeNonNegativeNumber(value) {
+  const parsed = toSafeNumber(value);
+  if (parsed == null || parsed < 0) return null;
+  return parsed;
+}
+
+function toSafeNonNegativeInt(value) {
+  const parsed = toSafeNonNegativeNumber(value);
+  if (parsed == null) return null;
+  return Math.round(parsed);
+}
+
 function normalizeAction(value) {
   const action = toSafeString(value, 40) || "unknown";
   if (["vote", "discard", "clear", "unknown"].includes(action)) return action;
@@ -110,6 +122,14 @@ function normalizeRecord(item) {
       model: toSafeString(apiA.model, 200),
       ok: !!apiA.ok,
       latencyMs: toSafeNumber(apiA.latencyMs),
+      ttftMs: toSafeNonNegativeNumber(apiA.ttftMs),
+      tps: toSafeNonNegativeNumber(apiA.tps),
+      outputTokens: toSafeNonNegativeInt(apiA.outputTokens),
+      outputChars: toSafeNonNegativeInt(apiA.outputChars),
+      tokenSource: (() => {
+        const source = toSafeString(apiA.tokenSource, 20) || "none";
+        return ["usage", "estimated", "none"].includes(source) ? source : "none";
+      })(),
       content: toSafeText(apiA.content, 50000),
     },
     apiB: {
@@ -117,6 +137,14 @@ function normalizeRecord(item) {
       model: toSafeString(apiB.model, 200),
       ok: !!apiB.ok,
       latencyMs: toSafeNumber(apiB.latencyMs),
+      ttftMs: toSafeNonNegativeNumber(apiB.ttftMs),
+      tps: toSafeNonNegativeNumber(apiB.tps),
+      outputTokens: toSafeNonNegativeInt(apiB.outputTokens),
+      outputChars: toSafeNonNegativeInt(apiB.outputChars),
+      tokenSource: (() => {
+        const source = toSafeString(apiB.tokenSource, 20) || "none";
+        return ["usage", "estimated", "none"].includes(source) ? source : "none";
+      })(),
       content: toSafeText(apiB.content, 50000),
     },
   };
@@ -128,9 +156,30 @@ function buildSummary(items) {
   let discardCount = 0;
   let aWins = 0;
   let bWins = 0;
+  let perfSamples = 0;
+  let ttftSamples = 0;
+  let tpsSamples = 0;
+  let ttftSum = 0;
+  let tpsSum = 0;
 
   for (const item of items) {
     if (item.sessionId) sessions.add(item.sessionId);
+
+    const responses = [item.apiA, item.apiB];
+    for (const api of responses) {
+      if (!api || !api.ok) continue;
+      perfSamples += 1;
+      const ttft = toSafeNonNegativeNumber(api.ttftMs);
+      if (ttft != null) {
+        ttftSum += ttft;
+        ttftSamples += 1;
+      }
+      const tps = toSafeNonNegativeNumber(api.tps);
+      if (tps != null) {
+        tpsSum += tps;
+        tpsSamples += 1;
+      }
+    }
 
     if (item.action === "vote") {
       voteCount += 1;
@@ -153,6 +202,11 @@ function buildSummary(items) {
     bWins,
     aWinRate: voteCount ? Number((aWins / voteCount).toFixed(4)) : 0,
     bWinRate: voteCount ? Number((bWins / voteCount).toFixed(4)) : 0,
+    perfSamples,
+    ttftSamples,
+    tpsSamples,
+    avgTtftMs: ttftSamples ? Number((ttftSum / ttftSamples).toFixed(2)) : null,
+    avgTps: tpsSamples ? Number((tpsSum / tpsSamples).toFixed(2)) : null,
   };
 }
 

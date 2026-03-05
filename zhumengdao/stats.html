@@ -54,6 +54,14 @@
     .matrix-cell-even { color: var(--text-soft); }
     .matrix-note { font-size: .75rem; color: var(--text-soft); padding: 0 18px 12px; }
 
+    .perf-wrap { overflow-x: auto; padding: 12px 16px 14px; }
+    .perf-table { width: 100%; border-collapse: collapse; font-size: .78rem; min-width: 660px; }
+    .perf-table th, .perf-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+    .perf-table th { font-weight: 700; color: var(--text-soft); background: #f7f9fd; font-size: .74rem; text-transform: uppercase; letter-spacing: .04em; }
+    .perf-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .perf-table tr:last-child td { border-bottom: none; }
+    .perf-note { font-size: .75rem; color: var(--text-soft); padding: 0 16px 12px; }
+
     .section-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); overflow: hidden; }
     .section-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 8px; }
     .section-head h2 { margin: 0; font-size: .85rem; font-weight: 700; color: var(--text-soft); text-transform: uppercase; letter-spacing: .04em; }
@@ -132,6 +140,8 @@
       <div class="kpi-card kpi-ok"><div class="kpi-label">已评</div><div class="kpi-value" id="kpiVotes">—</div></div>
       <div class="kpi-card"><div class="kpi-label">跳过</div><div class="kpi-value" id="kpiSkip">—</div></div>
       <div class="kpi-card"><div class="kpi-label">对话数</div><div class="kpi-value" id="kpiSessions">—</div></div>
+      <div class="kpi-card"><div class="kpi-label">平均 TTFT</div><div class="kpi-value" id="kpiAvgTtft">—</div><div class="kpi-sub">ms</div></div>
+      <div class="kpi-card"><div class="kpi-label">平均 TPS</div><div class="kpi-value" id="kpiAvgTps">—</div><div class="kpi-sub">tokens/s</div></div>
     </div>
 
     <div class="ranking-card">
@@ -143,6 +153,14 @@
       <h2>对战矩阵（行 vs 列）</h2>
       <div class="matrix-scroll" id="matrixBody"><p class="empty-state">暂无数据</p></div>
       <p class="matrix-note">格子显示：行模型 vs 列模型 的胜场/总场次（胜率%）。相同模型对战不计入。</p>
+    </div>
+
+    <div class="section-card">
+      <div class="section-head">
+        <h2>速度统计（TTFT / TPS）</h2>
+      </div>
+      <div class="perf-wrap" id="perfTableBody"><p class="empty-state" style="padding:12px 0">暂无速度数据</p></div>
+      <p class="perf-note">统计口径：仅包含调用成功（ok=true）的模型响应。TPS 由 tokens / (总耗时 - TTFT) 计算。</p>
     </div>
 
     <div class="section-card">
@@ -199,6 +217,24 @@
       if (!ts) return "—";
       return new Date(ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
     }
+    function toNum(value) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+    function formatNum(value, digits = 2) {
+      const n = toNum(value);
+      return n == null ? "—" : n.toFixed(digits);
+    }
+    function formatPerfInline(data) {
+      const parts = [];
+      const latency = toNum(data?.latencyMs);
+      const ttft = toNum(data?.ttftMs);
+      const tps = toNum(data?.tps);
+      if (latency != null) parts.push(`${Math.round(latency)}ms`);
+      if (ttft != null) parts.push(`TTFT ${Math.round(ttft)}ms`);
+      if (tps != null) parts.push(`TPS ${tps.toFixed(2)}`);
+      return parts.join(" · ");
+    }
 
     // ── 统计：对战矩阵 + Bradley-Terry 排名 ──────────────
     function buildMatchStats(records) {
@@ -209,6 +245,26 @@
       let voteCount = 0, discardCount = 0;
       const sessions = new Set();
       const modelSet = new Set();
+      let perfSamples = 0;
+      let ttftSamples = 0;
+      let tpsSamples = 0;
+      let ttftSum = 0;
+      let tpsSum = 0;
+      const perfByModel = new Map();
+
+      function ensurePerfModel(model) {
+        if (!perfByModel.has(model)) {
+          perfByModel.set(model, {
+            model,
+            samples: 0,
+            ttftSamples: 0,
+            tpsSamples: 0,
+            ttftSum: 0,
+            tpsSum: 0,
+          });
+        }
+        return perfByModel.get(model);
+      }
 
       function ensure(a, b) {
         if (!wins[a]) wins[a] = {};
@@ -223,6 +279,31 @@
 
       for (const r of records) {
         if (r.sessionId) sessions.add(r.sessionId);
+
+        const perfResponses = [r.apiA, r.apiB];
+        for (const api of perfResponses) {
+          if (!api || !api.ok) continue;
+          const model = api.model || "unknown";
+          const row = ensurePerfModel(model);
+          row.samples += 1;
+          perfSamples += 1;
+
+          const ttft = toNum(api.ttftMs);
+          if (ttft != null && ttft >= 0) {
+            row.ttftSamples += 1;
+            row.ttftSum += ttft;
+            ttftSamples += 1;
+            ttftSum += ttft;
+          }
+          const tps = toNum(api.tps);
+          if (tps != null && tps >= 0) {
+            row.tpsSamples += 1;
+            row.tpsSum += tps;
+            tpsSamples += 1;
+            tpsSum += tps;
+          }
+        }
+
         if (r.action === "discard") { discardCount++; continue; }
         if (r.action !== "vote") continue;
         voteCount++;
@@ -248,7 +329,33 @@
       }
 
       const models = [...modelSet].sort();
-      return { wins, games, models, voteCount, discardCount, sessions: sessions.size, total: records.length };
+      const perfRows = [...perfByModel.values()]
+        .map((row) => ({
+          model: row.model,
+          samples: row.samples,
+          avgTtftMs: row.ttftSamples ? row.ttftSum / row.ttftSamples : null,
+          avgTps: row.tpsSamples ? row.tpsSum / row.tpsSamples : null,
+        }))
+        .sort((a, b) => {
+          if (b.samples !== a.samples) return b.samples - a.samples;
+          const tpsA = toNum(a.avgTps) ?? -1;
+          const tpsB = toNum(b.avgTps) ?? -1;
+          return tpsB - tpsA;
+        });
+
+      return {
+        wins,
+        games,
+        models,
+        voteCount,
+        discardCount,
+        sessions: sessions.size,
+        total: records.length,
+        perfSamples,
+        avgTtftMs: ttftSamples ? ttftSum / ttftSamples : null,
+        avgTps: tpsSamples ? tpsSum / tpsSamples : null,
+        perfRows,
+      };
     }
 
     // Bradley-Terry 迭代求解
@@ -351,6 +458,35 @@
       document.getElementById("kpiVotes").textContent = stats.voteCount;
       document.getElementById("kpiSkip").textContent = stats.discardCount;
       document.getElementById("kpiSessions").textContent = stats.sessions;
+      document.getElementById("kpiAvgTtft").textContent =
+        stats.avgTtftMs != null ? String(Math.round(stats.avgTtftMs)) : "—";
+      document.getElementById("kpiAvgTps").textContent =
+        stats.avgTps != null ? stats.avgTps.toFixed(2) : "—";
+    }
+
+    function renderPerfTable(stats) {
+      const el = document.getElementById("perfTableBody");
+      const rows = Array.isArray(stats.perfRows) ? stats.perfRows : [];
+      if (!rows.length) {
+        el.innerHTML = `<p class="empty-state" style="padding:12px 0">暂无速度数据</p>`;
+        return;
+      }
+      let html = `<table class="perf-table"><thead><tr>
+        <th>模型</th>
+        <th style="text-align:right">样本</th>
+        <th style="text-align:right">平均 TTFT (ms)</th>
+        <th style="text-align:right">平均 TPS</th>
+      </tr></thead><tbody>`;
+      for (const row of rows) {
+        html += `<tr>
+          <td title="${esc(row.model)}">${esc(shortText(row.model, 48))}</td>
+          <td class="num">${row.samples}</td>
+          <td class="num">${formatNum(row.avgTtftMs, 0)}</td>
+          <td class="num">${formatNum(row.avgTps, 2)}</td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
+      el.innerHTML = html;
     }
 
     // ── 对话列表 ──────────────────────────────────────────
@@ -472,7 +608,7 @@
           div.innerHTML = `
             <div class="turn-response-head">
               <span class="turn-model-name" title="${esc(data.model)}">${esc(data.model || "—")}</span>
-              <span class="turn-latency">${data.latencyMs != null ? data.latencyMs + "ms" : ""}</span>
+              <span class="turn-latency">${esc(formatPerfInline(data))}</span>
               ${isChosen ? `<span class="chosen-badge">✓ 已选</span>` : ""}
             </div>
             <div class="turn-response-body">${esc(data.content || "（无内容）")}</div>
@@ -564,6 +700,7 @@
         renderKpi(stats);
         renderRanking(stats);
         renderMatrix(stats);
+        renderPerfTable(stats);
 
         document.getElementById("lastUpdated").textContent =
           `更新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
