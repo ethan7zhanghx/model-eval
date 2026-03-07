@@ -8,8 +8,5 @@
   "rewrites": [
     { "source": "/zhumengdao/(.*)", "destination": "/zhumengdao/$1" }
   ],
-  "redirects": [
-    { "source": "/", "destination": "/under-construction.html", "permanent": false },
-    { "source": "/index.html", "destination": "/under-construction.html", "permanent": false }
-  ]
+  "redirects": []
 }
