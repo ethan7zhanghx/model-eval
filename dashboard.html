@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>评测数据看板</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <style>
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 10px;
+    }
+    .kpi-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      padding: 16px 14px;
+      text-align: center;
+    }
+    .kpi-value {
+      font-size: 1.9rem;
+      font-weight: 700;
+      color: var(--accent);
+      line-height: 1.1;
+    }
+    .kpi-label {
+      font-size: .78rem;
+      color: var(--text-soft);
+      margin-top: 5px;
+    }
+    .dash-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 600px;
+    }
+    .dash-table th {
+      text-align: left;
+      font-size: .82rem;
+      font-weight: 700;
+      color: #fff;
+      background: linear-gradient(120deg, var(--accent-hover) 0%, var(--accent) 100%);
+      padding: 10px 12px;
+      border-right: 1px solid rgba(255,255,255,.12);
+    }
+    .dash-table td {
+      padding: 10px 12px;
+      border-top: 1px solid var(--line);
+      font-size: .85rem;
+      vertical-align: middle;
+    }
+    .dash-table tr:nth-child(even) td { background: #f9fbff; }
+    .score-bar-wrap { display: flex; align-items: center; gap: 8px; }
+    .score-bar {
+      height: 7px;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--accent), #34d399);
+      min-width: 2px;
+      transition: width .3s;
+    }
+    .score-val { font-size: .82rem; font-weight: 600; color: var(--text); white-space: nowrap; }
+    .null-val { color: var(--text-soft); font-size: .8rem; }
+    .run-item {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      background: #fff;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      transition: border-color .12s, box-shadow .12s;
+    }
+    .run-item:hover { border-color: var(--line-strong); box-shadow: var(--shadow-sm); }
+    .run-item + .run-item { margin-top: 6px; }
+    .run-title { font-size: .88rem; font-weight: 600; }
+    .run-meta { font-size: .76rem; color: var(--text-soft); margin-top: 3px; }
+    .run-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .empty-state {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--text-soft);
+      font-size: .9rem;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius-md);
+    }
+    .model-id-cell {
+      font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: .8rem;
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .rank-badge {
+      display: inline-block;
+      font-size: .72rem;
+      font-weight: 700;
+      border-radius: 999px;
+      padding: 2px 8px;
+      background: var(--accent-light);
+      color: var(--accent);
+      margin-right: 6px;
+    }
+    .rank-badge.gold { background: #fef9c3; color: #92400e; }
+    .rank-badge.silver { background: #f1f5f9; color: #475569; }
+    .rank-badge.bronze { background: #fef3c7; color: #78350f; }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-icon">📊</span>
+        <h1>评测数据看板<span class="brand-sub">Dashboard</span></h1>
+      </div>
+      <div class="header-actions">
+        <a href="./" class="ghost-btn" style="text-decoration:none">← 返回评测</a>
+        <button id="refreshBtn" class="ghost-btn">刷新</button>
+        <button id="clearAllBtn" class="ghost-btn">清空数据</button>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2><span class="panel-icon">📈</span>总览</h2>
+        <p id="lastUpdated" class="status" style="margin:0"></p>
+      </div>
+      <div class="kpi-grid" id="kpiGrid">
+        <div class="kpi-card"><div class="kpi-value" id="kpiRuns">—</div><div class="kpi-label">总运行次数</div></div>
+        <div class="kpi-card"><div class="kpi-value" id="kpiCases">—</div><div class="kpi-label">总测试用例</div></div>
+        <div class="kpi-card"><div class="kpi-value" id="kpiModels">—</div><div class="kpi-label">参与模型数</div></div>
+        <div class="kpi-card"><div class="kpi-value" id="kpiScored">—</div><div class="kpi-label">已评分用例</div></div>
+        <div class="kpi-card"><div class="kpi-value" id="kpiAvgLatency">—</div><div class="kpi-label">全局平均延迟 (ms)</div></div>
+        <div class="kpi-card"><div class="kpi-value" id="kpiAvgTps">—</div><div class="kpi-label">全局平均 TPS</div></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2><span class="panel-icon">🏅</span>模型评分排名</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="dash-table">
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>模型</th>
+              <th>测试用例</th>
+              <th>人工均分 /5</th>
+              <th>Judge 均分 /5</th>
+              <th>精确匹配率</th>
+            </tr>
+          </thead>
+          <tbody id="scoreTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2><span class="panel-icon">⚡</span>性能指标</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="dash-table">
+          <thead>
+            <tr>
+              <th>模型</th>
+              <th>平均延迟 (ms)</th>
+              <th>平均 TTFT (ms)</th>
+              <th>平均 TPS</th>
+              <th>平均 Token 用量</th>
+              <th>成功用例</th>
+            </tr>
+          </thead>
+          <tbody id="perfTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2><span class="panel-icon">🕘</span>历史运行记录</h2>
+      </div>
+      <div id="runsList"></div>
+    </section>
+
+  </div>
+
+  <script>
+    const EVAL_API = "/api/eval-results";
+
+    let allResults = [];
+
+    async function loadData() {
+      try {
+        const resp = await fetch(EVAL_API + "?limit=200");
+        const payload = await resp.json();
+        allResults = Array.isArray(payload.items) ? payload.items : [];
+        render();
+        document.getElementById("lastUpdated").textContent =
+          `共 ${payload.total ?? allResults.length} 条记录 · 更新于 ${new Date().toLocaleTimeString("zh-CN")}`;
+      } catch (e) {
+        document.getElementById("lastUpdated").textContent = "加载失败：" + e.message;
+      }
+    }
+
+    function aggregateByModel(results) {
+      const stats = {};
+      for (const run of results) {
+        for (const row of (run.rows || [])) {
+          for (const [modelId, r] of Object.entries(row.results || {})) {
+            if (!stats[modelId]) {
+              stats[modelId] = {
+                modelId,
+                caseCount: 0,
+                latencySum: 0, latencyCount: 0,
+                ttftSum: 0, ttftCount: 0,
+                tpsSum: 0, tpsCount: 0,
+                tokensSum: 0, tokensCount: 0,
+                manualScores: [], judgeScores: [], ruleScores: [],
+              };
+            }
+            const s = stats[modelId];
+            if (!r.ok || r.skipped) continue;
+            s.caseCount++;
+            if (r.latencyMs != null) { s.latencySum += r.latencyMs; s.latencyCount++; }
+            if (r.ttftMs != null) { s.ttftSum += r.ttftMs; s.ttftCount++; }
+            if (r.tps != null) { s.tpsSum += r.tps; s.tpsCount++; }
+            if (r.usage?.total_tokens != null) { s.tokensSum += r.usage.total_tokens; s.tokensCount++; }
+            if (r.manualScore != null) s.manualScores.push(r.manualScore);
+            if (r.judgeScore != null) s.judgeScores.push(r.judgeScore);
+            if (r.ruleScore != null) s.ruleScores.push(r.ruleScore);
+          }
+        }
+      }
+      return Object.values(stats).map((s) => {
+        const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+        return {
+          modelId: s.modelId,
+          caseCount: s.caseCount,
+          avgLatency: s.latencyCount ? Math.round(s.latencySum / s.latencyCount) : null,
+          avgTtft: s.ttftCount ? Math.round(s.ttftSum / s.ttftCount) : null,
+          avgTps: s.tpsCount ? +(s.tpsSum / s.tpsCount).toFixed(1) : null,
+          avgTokens: s.tokensCount ? Math.round(s.tokensSum / s.tokensCount) : null,
+          avgManual: avg(s.manualScores),
+          avgJudge: avg(s.judgeScores),
+          exactMatchRate: s.ruleScores.length ? s.ruleScores.filter((v) => v >= 0.5).length / s.ruleScores.length : null,
+          manualCount: s.manualScores.length,
+          judgeCount: s.judgeScores.length,
+          ruleCount: s.ruleScores.length,
+        };
+      });
+    }
+
+    function fmt(val, digits = 1) {
+      if (val == null) return '<span class="null-val">—</span>';
+      return typeof val === "number" ? val.toFixed(digits) : val;
+    }
+
+    function scoreBar(val, max = 5) {
+      if (val == null) return '<span class="null-val">—</span>';
+      const pct = Math.min(100, (val / max) * 100);
+      return `<div class="score-bar-wrap">
+        <div class="score-bar" style="width:${pct}px"></div>
+        <span class="score-val">${val.toFixed(2)}</span>
+      </div>`;
+    }
+
+    function rankBadge(i) {
+      if (i === 0) return '<span class="rank-badge gold">🥇 1</span>';
+      if (i === 1) return '<span class="rank-badge silver">🥈 2</span>';
+      if (i === 2) return '<span class="rank-badge bronze">🥉 3</span>';
+      return `<span class="rank-badge">${i + 1}</span>`;
+    }
+
+    function render() {
+      const modelStats = aggregateByModel(allResults);
+
+      // KPIs
+      const totalCases = allResults.reduce((s, r) => s + (r.rows?.length || 0), 0);
+      const uniqueModels = new Set(modelStats.map((m) => m.modelId)).size;
+      const scoredCases = allResults.reduce((s, run) => {
+        for (const row of (run.rows || [])) {
+          for (const r of Object.values(row.results || {})) {
+            if (r.manualScore != null || r.judgeScore != null || r.ruleScore != null) { s++; break; }
+          }
+        }
+        return s;
+      }, 0);
+      const allLatencies = modelStats.filter((m) => m.avgLatency != null).map((m) => m.avgLatency);
+      const allTps = modelStats.filter((m) => m.avgTps != null).map((m) => m.avgTps);
+      const globalAvgLatency = allLatencies.length ? Math.round(allLatencies.reduce((a, b) => a + b, 0) / allLatencies.length) : null;
+      const globalAvgTps = allTps.length ? +(allTps.reduce((a, b) => a + b, 0) / allTps.length).toFixed(1) : null;
+
+      document.getElementById("kpiRuns").textContent = allResults.length;
+      document.getElementById("kpiCases").textContent = totalCases;
+      document.getElementById("kpiModels").textContent = uniqueModels;
+      document.getElementById("kpiScored").textContent = scoredCases;
+      document.getElementById("kpiAvgLatency").textContent = globalAvgLatency ?? "—";
+      document.getElementById("kpiAvgTps").textContent = globalAvgTps ?? "—";
+
+      // Score ranking — sort by composite score (judge > manual > exact match)
+      const scored = [...modelStats].sort((a, b) => {
+        const scoreA = a.avgJudge ?? a.avgManual ?? (a.exactMatchRate != null ? a.exactMatchRate * 5 : -1);
+        const scoreB = b.avgJudge ?? b.avgManual ?? (b.exactMatchRate != null ? b.exactMatchRate * 5 : -1);
+        return scoreB - scoreA;
+      });
+
+      const scoreBody = document.getElementById("scoreTableBody");
+      if (!scored.length) {
+        scoreBody.innerHTML = '<tr><td colspan="6" class="null-val" style="text-align:center;padding:20px">暂无数据</td></tr>';
+      } else {
+        scoreBody.innerHTML = scored.map((m, i) => `
+          <tr>
+            <td>${rankBadge(i)}</td>
+            <td class="model-id-cell" title="${m.modelId}">${m.modelId}</td>
+            <td>${m.caseCount}</td>
+            <td>${scoreBar(m.avgManual)}${m.manualCount ? `<span class="null-val" style="font-size:.72rem">(${m.manualCount}条)</span>` : ""}</td>
+            <td>${scoreBar(m.avgJudge)}${m.judgeCount ? `<span class="null-val" style="font-size:.72rem">(${m.judgeCount}条)</span>` : ""}</td>
+            <td>${m.exactMatchRate != null ? `${(m.exactMatchRate * 100).toFixed(1)}%<span class="null-val" style="font-size:.72rem"> (${m.ruleCount}条)</span>` : '<span class="null-val">—</span>'}</td>
+          </tr>`).join("");
+      }
+
+      // Performance table — sort by avg latency
+      const perf = [...modelStats].sort((a, b) => (a.avgLatency ?? Infinity) - (b.avgLatency ?? Infinity));
+      const perfBody = document.getElementById("perfTableBody");
+      if (!perf.length) {
+        perfBody.innerHTML = '<tr><td colspan="6" class="null-val" style="text-align:center;padding:20px">暂无数据</td></tr>';
+      } else {
+        perfBody.innerHTML = perf.map((m) => `
+          <tr>
+            <td class="model-id-cell" title="${m.modelId}">${m.modelId}</td>
+            <td>${m.avgLatency != null ? m.avgLatency : '<span class="null-val">—</span>'}</td>
+            <td>${m.avgTtft != null ? m.avgTtft : '<span class="null-val">—</span>'}</td>
+            <td>${m.avgTps != null ? m.avgTps : '<span class="null-val">—</span>'}</td>
+            <td>${m.avgTokens != null ? m.avgTokens : '<span class="null-val">—</span>'}</td>
+            <td>${m.caseCount}</td>
+          </tr>`).join("");
+      }
+
+      // Runs list
+      const runsList = document.getElementById("runsList");
+      if (!allResults.length) {
+        runsList.innerHTML = '<div class="empty-state">暂无运行记录。在评测平台执行一次测试后，结果将自动保存到这里。</div>';
+      } else {
+        runsList.innerHTML = allResults.map((run) => {
+          const models = run.config?.models?.join(", ") || "—";
+          const rowCount = run.rows?.length || 0;
+          const scoreMethod = { none: "不评分", exact: "精确匹配", judge: "LLM Judge" }[run.config?.scoreMethod] || run.config?.scoreMethod;
+          const time = new Date(run.savedAt).toLocaleString("zh-CN", { hour12: false });
+          return `<div class="run-item">
+            <div>
+              <div class="run-title">${time}</div>
+              <div class="run-meta">${rowCount} 条用例 · ${run.config?.models?.length || 0} 个模型 · 评分：${scoreMethod} · T=${run.config?.temperature ?? 0}</div>
+              <div class="run-meta" style="margin-top:2px;font-family:ui-monospace,monospace;font-size:.72rem">${models}</div>
+            </div>
+            <div class="run-actions">
+              <button class="small-btn" onclick="deleteRun('${run.id}')">删除</button>
+            </div>
+          </div>`;
+        }).join("");
+      }
+    }
+
+    async function deleteRun(id) {
+      if (!confirm("确认删除这条运行记录？")) return;
+      await fetch(`${EVAL_API}?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadData();
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", loadData);
+    document.getElementById("clearAllBtn").addEventListener("click", async () => {
+      if (!confirm("确认清空所有评测数据？此操作不可撤销。")) return;
+      await fetch(EVAL_API, { method: "DELETE" });
+      await loadData();
+    });
+
+    loadData();
+  </script>
+</body>
+</html>

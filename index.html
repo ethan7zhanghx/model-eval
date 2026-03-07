@@ -3,25 +3,34 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenRouter 多模型对比台</title>
+  <title>模型评测平台</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <div class="bg-glow glow-a"></div>
-  <div class="bg-glow glow-b"></div>
 
-  <main class="container">
-    <header class="hero">
-      <p class="eyebrow">OpenRouter Case Runner</p>
-      <h1>多模型多轮 Case 对比</h1>
-      <p class="subtitle">支持 OpenRouter 官方模型列表或自定义接口，按表格环节一次执行完整流程。</p>
+  <div class="page-shell">
+
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-icon">🧪</span>
+        <h1>模型评测平台<span class="brand-sub">Model Eval</span></h1>
+      </div>
+      <div class="header-actions">
+        <a href="./zhumengdao/" class="ghost-btn" style="text-decoration:none">⛵ 筑梦岛</a>
+        <a href="./dashboard.html" class="ghost-btn" style="text-decoration:none">📊 数据看板</a>
+        <button id="saveConfigBtn" class="ghost-btn">保存配置</button>
+        <button id="runWorkflowBtn" class="primary">▶ 执行</button>
+      </div>
     </header>
 
     <section class="panel config-panel">
-      <h2>全局配置</h2>
+      <div class="panel-head">
+        <h2><span class="panel-icon">⚙️</span>全局配置</h2>
+        <p id="statusBar" class="status" style="margin:0"></p>
+      </div>
       <div class="form-grid">
         <label>
           <span id="apiKeyLabel">OpenRouter API Key</span>
@@ -53,7 +62,7 @@
 
         <label class="full-span">
           <span>System Prompt</span>
-          <textarea id="systemPromptInput" rows="4"></textarea>
+          <textarea id="systemPromptInput" rows="3"></textarea>
         </label>
       </div>
       <div class="cost-estimate-row">
@@ -63,15 +72,14 @@
         </label>
         <p id="costSummary" class="status">预估总花费：等待输入 Prompt 与模型</p>
       </div>
-      <p id="statusBar" class="status">等待开始</p>
     </section>
 
     <section class="panel model-panel">
       <div class="panel-head">
-        <h2>模型列配置</h2>
+        <h2><span class="panel-icon">🤖</span>模型列配置</h2>
         <div class="actions-inline">
-          <button id="refreshModelsBtn">刷新官方模型列表</button>
-          <button id="addModelColBtn" class="primary">添加模型列</button>
+          <button id="refreshModelsBtn" class="ghost-btn">刷新模型列表</button>
+          <button id="addModelColBtn" class="primary">+ 添加模型列</button>
         </div>
       </div>
       <p id="modelMeta" class="hint">正在加载官方模型列表...</p>
@@ -80,32 +88,65 @@
 
     <section class="panel history-panel">
       <div class="panel-head">
-        <h2>配置历史</h2>
+        <h2><span class="panel-icon">🕘</span>配置历史</h2>
         <div class="actions-inline">
-          <button id="saveConfigBtn" class="primary">保存当前配置</button>
-          <button id="clearHistoryBtn">清空历史</button>
+          <button id="clearHistoryBtn" class="ghost-btn">清空历史</button>
         </div>
       </div>
       <p class="hint">保存模型列、System Prompt、Temperature、环节 Prompt。</p>
       <div id="historyList" class="history-list"></div>
     </section>
 
+    <section class="panel judge-panel" id="judgeSection">
+      <div class="panel-head">
+        <h2><span class="panel-icon">🏅</span>评分配置</h2>
+        <div class="actions-inline">
+          <button id="runJudgeBtn" class="primary">运行 Judge 评分</button>
+        </div>
+      </div>
+      <div class="score-method-row">
+        <label>
+          <span>评分方式</span>
+          <select id="globalScoreMethod">
+            <option value="none">不评分</option>
+            <option value="exact">精确匹配（需参考答案）</option>
+            <option value="judge">LLM Judge</option>
+          </select>
+        </label>
+        <p class="hint" style="margin:0">精确匹配：参考答案在每行 Prompt 列下方填写，或通过数据集导入自动填入。</p>
+      </div>
+      <div id="judgeConfig" class="hidden">
+        <div class="form-grid judge-form-grid">
+          <label>
+            <span>Judge 模型 ID</span>
+            <input id="judgeModelInput" type="text" placeholder="例如 openai/gpt-4o-mini" autocomplete="off">
+          </label>
+          <label class="full-span">
+            <span>Judge Prompt 模板 <small>（变量：{{prompt}} {{response}} {{reference}}）</small></span>
+            <textarea id="judgePromptInput" rows="6"></textarea>
+          </label>
+        </div>
+      </div>
+      <div id="scoreSummary" class="score-summary"></div>
+    </section>
+
     <section class="panel table-panel">
       <div class="panel-head">
-        <h2>模型测试</h2>
+        <h2><span class="panel-icon">📋</span>测试用例</h2>
         <div class="actions-inline">
-          <button id="importPromptBtn">导入环节 md/txt</button>
-          <button id="addRowBtn" class="primary">新增环节</button>
-          <button id="clearRowsBtn">清空环节</button>
+          <button id="importDatasetBtn" class="primary">导入数据集</button>
+          <button id="importPromptBtn" class="ghost-btn">导入 md/txt</button>
+          <button id="addRowBtn" class="ghost-btn">+ 新增</button>
+          <button id="clearRowsBtn" class="ghost-btn">清空</button>
         </div>
       </div>
       <div class="actions">
-        <button id="runWorkflowBtn" class="primary">执行完整流程</button>
-        <button id="clearResultsBtn">清空结果</button>
-        <button id="exportBtn">导出 JSON</button>
+        <button id="clearResultsBtn" class="ghost-btn">清空结果</button>
+        <button id="exportBtn" class="ghost-btn">导出 JSON</button>
       </div>
       <input id="promptFileInput" type="file" accept=".md,.txt,text/markdown,text/plain" hidden>
-      <p class="hint">固定流程多轮对话导入：每个分段代表一个环节 Prompt。优先按 `---` 分段；否则按 Markdown 标题分段；再按空行分段。</p>
+      <input id="datasetFileInput" type="file" accept=".csv,.json,.xlsx" hidden>
+      <p class="hint">数据集模式：导入 CSV / JSON / XLSX，选择 Q/A 列后批量跑。多轮对话模式：手动填写或导入 md/txt。</p>
 
       <div class="table-wrap">
         <table id="caseTable">
@@ -114,7 +155,19 @@
         </table>
       </div>
     </section>
-  </main>
+  </div><!-- /.page-shell -->
+
+  <!-- Column mapping modal -->
+  <div id="columnMapModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2>列映射配置</h2>
+      <div id="columnMapForm" class="column-map-form"></div>
+      <div class="actions-inline" style="margin-top:14px">
+        <button id="columnMapConfirm" class="primary">确认导入</button>
+        <button id="columnMapCancel">取消</button>
+      </div>
+    </div>
+  </div>
 
   <template id="modelColumnTemplate">
     <article class="model-column-card">

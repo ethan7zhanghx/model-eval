@@ -10,6 +10,8 @@ const DATA_DIR = path.join(ROOT_DIR, "data");
 const HISTORY_FILE = path.join(DATA_DIR, "config-history.json");
 const ZMD_RECORDS_FILE = path.join(DATA_DIR, "zhumengdao-records.json");
 const ZMD_SESSIONS_FILE = path.join(DATA_DIR, "zhumengdao-sessions.json");
+const EVAL_RESULTS_FILE = path.join(DATA_DIR, "eval-results.json");
+const MAX_EVAL_RESULTS = 200;
 
 const MAX_CONFIG_HISTORY = 30;
 const MAX_ZMD_RECORDS = 20000;
@@ -648,6 +650,131 @@ async function handleZmdRecordsApi(req, res, urlObj) {
   sendJson(res, 405, { error: "Method not allowed" });
 }
 
+// ── Eval Results storage ───────────────────────────────────────────────────────
+
+function normalizeEvalResultRow(row) {
+  if (!row || typeof row !== "object") return null;
+  const results = {};
+  if (row.results && typeof row.results === "object") {
+    for (const [modelId, r] of Object.entries(row.results)) {
+      if (!r || typeof r !== "object") continue;
+      const safeId = toSafeString(modelId, 200);
+      if (!safeId) continue;
+      results[safeId] = {
+        ok: !!r.ok,
+        skipped: !!r.skipped,
+        latencyMs: toSafeNonNegativeNumber(r.latencyMs),
+        ttftMs: toSafeNonNegativeNumber(r.ttftMs),
+        tps: toSafeNonNegativeNumber(r.tps),
+        usage: r.usage && typeof r.usage === "object" ? {
+          prompt_tokens: toSafeNonNegativeInt(r.usage.prompt_tokens),
+          completion_tokens: toSafeNonNegativeInt(r.usage.completion_tokens),
+          total_tokens: toSafeNonNegativeInt(r.usage.total_tokens),
+        } : null,
+        content: toSafeText(r.content, 50000),
+        manualScore: toSafeNonNegativeNumber(r.manualScore),
+        ruleScore: toSafeNumber(r.ruleScore),
+        judgeScore: toSafeNonNegativeNumber(r.judgeScore),
+        judgeDetail: r.judgeDetail && typeof r.judgeDetail === "object" ? {
+          accuracy: toSafeNumber(r.judgeDetail.accuracy),
+          completeness: toSafeNumber(r.judgeDetail.completeness),
+          fluency: toSafeNumber(r.judgeDetail.fluency),
+          reason: toSafeString(r.judgeDetail.reason, 500),
+        } : null,
+      };
+    }
+  }
+  return {
+    prompt: toSafeText(row.prompt, 20000),
+    scoreRef: toSafeText(row.scoreRef, 5000),
+    results,
+  };
+}
+
+function normalizeEvalResult(item) {
+  if (!item || typeof item !== "object") return null;
+  const config = item.config && typeof item.config === "object" ? item.config : {};
+  const models = Array.isArray(config.models)
+    ? config.models.map((m) => toSafeString(m, 200)).filter(Boolean).slice(0, 20)
+    : [];
+  const rows = Array.isArray(item.rows)
+    ? item.rows.map(normalizeEvalResultRow).filter(Boolean).slice(0, 500)
+    : [];
+  const savedAt = toSafeNumber(item.savedAt);
+  return {
+    id: toSafeString(item.id, 120) || `eval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    savedAt: savedAt || Date.now(),
+    config: {
+      models,
+      systemPrompt: toSafeText(config.systemPrompt, 12000),
+      temperature: (() => { const v = toSafeNumber(config.temperature); if (v == null) return 0; return Math.max(0, Math.min(2, v)); })(),
+      scoreMethod: toSafeString(config.scoreMethod, 20) || "none",
+    },
+    rows,
+  };
+}
+
+async function ensureEvalResultsFile() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  try { await fs.access(EVAL_RESULTS_FILE); }
+  catch { await fs.writeFile(EVAL_RESULTS_FILE, "[]\n", "utf8"); }
+}
+
+async function readEvalResults() {
+  await ensureEvalResultsFile();
+  try {
+    const raw = await fs.readFile(EVAL_RESULTS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeEvalResult).filter(Boolean).slice(0, MAX_EVAL_RESULTS);
+  } catch { return []; }
+}
+
+async function writeEvalResults(items) {
+  await ensureEvalResultsFile();
+  const normalized = Array.isArray(items) ? items.map(normalizeEvalResult).filter(Boolean).slice(0, MAX_EVAL_RESULTS) : [];
+  const tmpFile = `${EVAL_RESULTS_FILE}.tmp`;
+  await fs.writeFile(tmpFile, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+  await fs.rename(tmpFile, EVAL_RESULTS_FILE);
+}
+
+async function handleEvalResultsApi(req, res, urlObj) {
+  if (req.method === "GET") {
+    const limit = sanitizeLimit(urlObj.searchParams.get("limit") || "100");
+    const results = await readEvalResults();
+    sendJson(res, 200, { items: results.slice(0, limit), total: results.length });
+    return;
+  }
+
+  if (req.method === "POST") {
+    let body;
+    try { body = await parseJsonBody(req); }
+    catch (error) { sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) }); return; }
+    const item = normalizeEvalResult(body?.item);
+    if (!item) { sendJson(res, 400, { error: "Invalid eval result" }); return; }
+    const results = await readEvalResults();
+    const idx = results.findIndex((r) => r.id === item.id);
+    if (idx >= 0) { results[idx] = item; } else { results.unshift(item); }
+    await writeEvalResults(results.slice(0, MAX_EVAL_RESULTS));
+    sendJson(res, 200, { item });
+    return;
+  }
+
+  if (req.method === "DELETE") {
+    const id = urlObj.searchParams.get("id");
+    if (id) {
+      const results = await readEvalResults();
+      await writeEvalResults(results.filter((r) => r.id !== id));
+    } else {
+      await writeEvalResults([]);
+    }
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  sendJson(res, 405, { error: "Method not allowed" });
+}
+
 function resolveStaticFile(urlPath) {
   const decoded = decodeURIComponent(urlPath || "/");
   const relative = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "");
@@ -728,6 +855,15 @@ const server = http.createServer(async (req, res) => {
   if (urlObj.pathname === "/api/zhumengdao-sessions") {
     try {
       await handleZmdSessionsApi(req, res, urlObj);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
+  if (urlObj.pathname === "/api/eval-results") {
+    try {
+      await handleEvalResultsApi(req, res, urlObj);
     } catch (error) {
       sendJson(res, 500, { error: "Server error", detail: String(error) });
     }
