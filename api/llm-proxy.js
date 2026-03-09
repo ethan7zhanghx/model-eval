@@ -46,7 +46,11 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const { endpoint, apiKey, payload: llmPayload } = body || {};
+  const { endpoint, apiKey: userApiKey, side, payload: llmPayload } = body || {};
+
+  // 用户填了 key 就用用户的，否则按 side (a/b) 取服务端默认 key
+  const defaultKeyBySide = side === "b" ? process.env.DEFAULT_API_KEY_B : process.env.DEFAULT_API_KEY_A;
+  const apiKey = userApiKey || defaultKeyBySide || "";
 
   if (!endpoint || typeof endpoint !== "string") {
     sendJson(res, 400, { error: "Missing endpoint" });

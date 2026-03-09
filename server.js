@@ -834,6 +834,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (urlObj.pathname === "/api/default-config") {
+    require("./api/default-config")(req, res);
+    return;
+  }
+
   if (urlObj.pathname === "/api/llm-proxy") {
     try {
       await handleLlmProxy(req, res);

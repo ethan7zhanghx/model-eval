@@ -40,6 +40,7 @@ const state = {
   sessionCreatedAt: 0,
   turnOrder: 0,
   storageReady: false,
+  serverDefaultKeys: { a: false, b: false },
 };
 
 const el = {
@@ -658,7 +659,11 @@ function validateConfig(config) {
   if (!/^https?:\/\//i.test(endpointA) || !/^https?:\/\//i.test(endpointB)) {
     return "Base URL 必须以 http:// 或 https:// 开头";
   }
-  if (!config.apiKeyA || !config.apiKeyB) return "请填写 API Key";
+  if (!config.apiKeyA || !config.apiKeyB) {
+    // 没有用户 key 时，依赖服务端默认 key；如果服务端也没有则报错
+    if (!state.serverDefaultKeys?.a && !config.apiKeyA) return "请填写 A 路 API Key（或联系管理员配置默认 Key）";
+    if (!state.serverDefaultKeys?.b && !config.apiKeyB) return "请填写 B 路 API Key（或联系管理员配置默认 Key）";
+  }
   if (!config.modelA || !config.modelB) return "请完整填写两路 Model ID";
   if (!getSelectedRole()) return "请选择角色设定";
   return null;
@@ -830,7 +835,7 @@ function buildFailedResult(sourceTag, latencyMs, content) {
   };
 }
 
-async function requestOne({ endpoint, apiKey, model, messages, temperature, sourceTag }) {
+async function requestOne({ endpoint, apiKey, model, messages, temperature, sourceTag, side }) {
   const start = performance.now();
   try {
     const response = await fetch(LLM_PROXY_ENDPOINT, {
@@ -839,6 +844,7 @@ async function requestOne({ endpoint, apiKey, model, messages, temperature, sour
       body: JSON.stringify({
         endpoint,
         apiKey,
+        side,
         payload: {
           model,
           messages,
@@ -1081,8 +1087,8 @@ async function sendUserTurn() {
   setStatus("正在生成回答...", "warn");
 
   const [resultA, resultB] = await Promise.all([
-    requestOne({ endpoint: config.endpointA, apiKey: config.apiKeyA, model: config.modelA, messages, temperature, sourceTag: "a" }),
-    requestOne({ endpoint: config.endpointB, apiKey: config.apiKeyB, model: config.modelB, messages, temperature, sourceTag: "b" }),
+    requestOne({ endpoint: config.endpointA, apiKey: config.apiKeyA, model: config.modelA, messages, temperature, sourceTag: "a", side: "a" }),
+    requestOne({ endpoint: config.endpointB, apiKey: config.apiKeyB, model: config.modelB, messages, temperature, sourceTag: "b", side: "b" }),
   ]);
 
   state.loading = false;
@@ -1263,6 +1269,19 @@ async function init() {
   try {
     await loadRoles();
     hydrateConfig();
+
+    // 拉服务端默认配置，填充用户未填写的 endpoint/model
+    try {
+      const defRes = await fetch("/api/default-config");
+      if (defRes.ok) {
+        const def = await defRes.json();
+        state.serverDefaultKeys = { a: !!def.a?.hasKey, b: !!def.b?.hasKey };
+        if (!el.endpointAInput.value && def.a?.endpoint) el.endpointAInput.value = def.a.endpoint;
+        if (!el.modelAInput.value && def.a?.model) el.modelAInput.value = def.a.model;
+        if (!el.endpointBInput.value && def.b?.endpoint) el.endpointBInput.value = def.b.endpoint;
+        if (!el.modelBInput.value && def.b?.model) el.modelBInput.value = def.b.model;
+      }
+    } catch { /* 拉不到默认配置不影响正常使用 */ }
     if (!el.roleSelect.value || !getSelectedRole()) el.roleSelect.value = state.roles[0].id;
     renderRolePreview();
     bindEvents();
@@ -1288,7 +1307,8 @@ async function init() {
     }
 
     const cfg = readConfigFromInputs();
-    if (!cfg.apiKeyA || !cfg.apiKeyB) setSettingsOpen(true);
+    // 只有用户没填 key 且服务端也没有默认 key 时才弹出设置面板
+    if ((!cfg.apiKeyA && !state.serverDefaultKeys.a) || (!cfg.apiKeyB && !state.serverDefaultKeys.b)) setSettingsOpen(true);
     if (!restored) setStatus("就绪。", "ok");
   } catch (error) {
     console.error("Init failed:", error);
