@@ -71,6 +71,7 @@ const el = {
   clearChatBtn: document.getElementById("clearChatBtn"),
   statusBar: document.getElementById("statusBar"),
   chatTimeline: document.getElementById("chatTimeline"),
+  compareHeaderLabel: document.getElementById("compareHeaderLabel"),
   comparePanel: document.getElementById("comparePanel"),
   labelLeft: document.getElementById("labelLeft"),
   labelRight: document.getElementById("labelRight"),
@@ -124,7 +125,12 @@ function buildSessionPayload() {
     },
     turnCount: state.turnOrder,
     deviceId: getDeviceId(),
-    messages: state.history.map((m) => ({ role: m.role, content: m.content, source: m.source, time: m.time })),
+    messages: state.history.map((m) => {
+      if (m.type === "compare") {
+        return { type: "compare", responses: m.responses, displayOrder: m.displayOrder, voted: m.voted, votedModel: m.votedModel };
+      }
+      return { role: m.role, content: m.content, source: m.source, time: m.time };
+    }),
   };
 }
 
@@ -149,12 +155,12 @@ function restoreSession(session) {
   state.pendingTurn = null;
   state.loading = false;
   state.loadingUserText = "";
-  state.history = (session.messages || []).map((m) => ({
-    role: m.role,
-    content: m.content,
-    source: m.source,
-    time: m.time,
-  }));
+  state.history = (session.messages || []).map((m) => {
+    if (m.type === "compare") {
+      return { type: "compare", responses: m.responses, displayOrder: m.displayOrder, voted: m.voted, votedModel: m.votedModel };
+    }
+    return { role: m.role, content: m.content, source: m.source, time: m.time };
+  });
   sessionStorage.setItem(LS_KEY_SESSION, session.id);
   renderTimeline();
   renderComparePanel();
@@ -536,6 +542,47 @@ function hydrateConfig(serverDef = { a: {}, b: {} }) {
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 
+function createCompareNode(row) {
+  const [leftSrc, rightSrc] = row.displayOrder;
+  const leftRes = row.responses[leftSrc];
+  const rightRes = row.responses[rightSrc];
+  const voted = row.voted; // sourceTag or undefined
+
+  const wrap = document.createElement("div");
+  wrap.className = "timeline-compare";
+
+  const grid = document.createElement("div");
+  grid.className = "timeline-compare-grid";
+
+  function makeCard(src, res) {
+    const card = document.createElement("article");
+    card.className = "tl-response-card";
+    if (voted) {
+      card.classList.add(voted === src ? "card-chosen" : "card-unchosen");
+    }
+
+    const head = document.createElement("div");
+    head.className = "response-card-head";
+    head.innerHTML = `<span class="response-tag tag-${src}">${src.toUpperCase()}</span>` +
+      `<span class="response-latency">${escapeHtml(formatPerfText(res))}</span>` +
+      (voted === src ? `<span class="tl-chosen-badge">✓ 已选</span>` : "");
+
+    const body = document.createElement("div");
+    body.className = "response-body";
+    body.textContent = res.content || (res.ok ? "" : `请求失败：${res.error || ""}`);
+    if (!res.ok) body.classList.add("response-error");
+
+    card.appendChild(head);
+    card.appendChild(body);
+    return card;
+  }
+
+  grid.appendChild(makeCard(leftSrc, leftRes));
+  grid.appendChild(makeCard(rightSrc, rightRes));
+  wrap.appendChild(grid);
+  return wrap;
+}
+
 function createMessageNode(message) {
   const item = document.createElement("article");
   item.className = `msg ${message.role}`;
@@ -575,7 +622,11 @@ function renderTimeline() {
   }
 
   for (const row of rows) {
-    el.chatTimeline.appendChild(createMessageNode(row));
+    if (row.type === "compare") {
+      el.chatTimeline.appendChild(createCompareNode(row));
+    } else {
+      el.chatTimeline.appendChild(createMessageNode(row));
+    }
   }
 
   if (state.loading) {
@@ -619,9 +670,12 @@ function renderComparePanel() {
   el.responseB.textContent = pending.responses[rightSrc].content;
   if (el.latencyA) el.latencyA.textContent = formatPerfText(pending.responses[leftSrc]);
   if (el.latencyB) el.latencyB.textContent = formatPerfText(pending.responses[rightSrc]);
+  el.chooseABtn.classList.remove("hidden");
+  el.chooseBBtn.classList.remove("hidden");
   el.chooseABtn.disabled = state.busy || !pending.responses[leftSrc].ok;
   el.chooseBBtn.disabled = state.busy || !pending.responses[rightSrc].ok;
   el.discardTurnBtn.disabled = state.busy;
+  if (el.compareHeaderLabel) el.compareHeaderLabel.textContent = "选择更好的回答继续对话";
 
   requestAnimationFrame(() => {
     const h = el.comparePanel.offsetHeight;
@@ -657,7 +711,15 @@ function buildRequestMessages(userText) {
   const systemPrompt = buildRoleSystemPrompt(role);
   if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
   for (const item of state.history) {
-    messages.push({ role: item.role, content: item.content });
+    if (item.type === "compare") {
+      // 把选中的那条作为 assistant 消息加入上下文
+      if (item.voted) {
+        const chosen = item.responses[item.voted];
+        if (chosen?.content) messages.push({ role: "assistant", content: chosen.content });
+      }
+    } else {
+      messages.push({ role: item.role, content: item.content });
+    }
   }
   messages.push({ role: "user", content: userText });
   return messages;
@@ -1139,8 +1201,15 @@ async function chooseTurn(sourceTag) {
   setBusy(true);
   try {
     await appendRecord(record);
+    // 把用户消息 + 对比结果（带 voted 标记）写入 history
     state.history.push({ role: "user", content: state.pendingTurn.userText, time: state.pendingTurn.time });
-    state.history.push({ role: "assistant", content: selected.content, source: sourceTag, model: record.selectedModel, time: nowText() });
+    state.history.push({
+      type: "compare",
+      responses: state.pendingTurn.responses,
+      displayOrder: state.pendingTurn.displayOrder,
+      voted: sourceTag,
+      votedModel: record.selectedModel,
+    });
     state.turnOrder = state.pendingTurn.turnOrder;
     state.pendingTurn = null;
     renderTimeline();

@@ -281,6 +281,50 @@ button:disabled {
   30% { transform: translateY(-5px); opacity: 1; }
 }
 
+/* ── Timeline compare block (permanent, embedded in chat) ─── */
+.timeline-compare {
+  width: 100%;
+  margin: 4px 0 8px;
+}
+
+.timeline-compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.tl-response-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color .2s, box-shadow .2s, opacity .2s;
+}
+
+.tl-response-card.card-chosen {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent), var(--shadow-sm);
+}
+
+.tl-response-card.card-unchosen {
+  opacity: .4;
+}
+
+.tl-chosen-badge {
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-left: auto;
+}
+
+@media (max-width: 600px) {
+  .timeline-compare-grid { grid-template-columns: 1fr; }
+}
+
 /* ── Compare panel (floats over bottom of chat-main) ─────── */
 .compare-panel {
   position: absolute;
