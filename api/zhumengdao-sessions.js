@@ -68,6 +68,10 @@ function normalizeSession(item) {
   if (!item || typeof item !== "object") return null;
   const createdAt = toSafeNumber(item.createdAt);
   const updatedAt = toSafeNumber(item.updatedAt);
+  const archivedAtRaw = item.archivedAt;
+  const archivedAt = archivedAtRaw === null || archivedAtRaw === ""
+    ? null
+    : toSafeNumber(archivedAtRaw);
   const config = item.config && typeof item.config === "object" ? item.config : {};
   const messages = Array.isArray(item.messages)
     ? item.messages.slice(0, 500).map((m) => {
@@ -112,6 +116,7 @@ function normalizeSession(item) {
     },
     turnCount: Math.max(0, Math.floor(toSafeNumber(item.turnCount) || 0)),
     deviceId: toSafeString(item.deviceId, 120),
+    archivedAt: archivedAt != null && archivedAt > 0 ? archivedAt : null,
     messages,
   };
 }
@@ -178,6 +183,25 @@ module.exports = async function handler(req, res) {
 
       await writeSessions(sessions);
       sendJson(res, 200, { session });
+      return;
+    }
+
+    if (req.method === "PATCH") {
+      let body;
+      try { body = parseBody(req); }
+      catch (error) { sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) }); return; }
+
+      const { id, patch } = body || {};
+      if (!id || !patch) { sendJson(res, 400, { error: "id and patch required" }); return; }
+
+      const sessions = await readSessions();
+      const idx = sessions.findIndex((s) => s.id === id);
+      if (idx < 0) { sendJson(res, 404, { error: "Session not found" }); return; }
+
+      const updated = normalizeSession({ ...sessions[idx], ...patch, id, updatedAt: Date.now() });
+      sessions[idx] = updated;
+      await writeSessions(sessions);
+      sendJson(res, 200, { session: updated });
       return;
     }
 

@@ -335,6 +335,10 @@ function normalizeZmdSession(item) {
   if (!item || typeof item !== "object") return null;
   const createdAt = toSafeNumber(item.createdAt);
   const updatedAt = toSafeNumber(item.updatedAt);
+  const archivedAtRaw = item.archivedAt;
+  const archivedAt = archivedAtRaw === null || archivedAtRaw === ""
+    ? null
+    : toSafeNumber(archivedAtRaw);
   const config = item.config && typeof item.config === "object" ? item.config : {};
   const messages = Array.isArray(item.messages)
     ? item.messages.slice(0, 500).map((m) => ({
@@ -364,6 +368,7 @@ function normalizeZmdSession(item) {
       endpointHostB: toSafeString(config.endpointHostB, 200),
     },
     turnCount: Math.max(0, Math.floor(toSafeNumber(item.turnCount) || 0)),
+    archivedAt: archivedAt != null && archivedAt > 0 ? archivedAt : null,
     messages,
   };
 }
