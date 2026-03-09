@@ -51,18 +51,45 @@ function getRedis() {
   return _redis;
 }
 
+function normalizeResponse(r) {
+  if (!r || typeof r !== "object") return { ok: false, content: "" };
+  return {
+    ok: !!r.ok,
+    content: toSafeText(r.content, 30000),
+    latencyMs: toSafeNumber(r.latencyMs),
+    ttftMs: toSafeNumber(r.ttftMs),
+    tps: toSafeNumber(r.tps),
+    outputTokens: toSafeNumber(r.outputTokens),
+    error: r.error ? toSafeString(r.error, 500) : undefined,
+  };
+}
+
 function normalizeSession(item) {
   if (!item || typeof item !== "object") return null;
   const createdAt = toSafeNumber(item.createdAt);
   const updatedAt = toSafeNumber(item.updatedAt);
   const config = item.config && typeof item.config === "object" ? item.config : {};
   const messages = Array.isArray(item.messages)
-    ? item.messages.slice(0, 500).map((m) => ({
-        role: ["user", "assistant"].includes(String(m?.role)) ? String(m.role) : "user",
-        content: toSafeText(m?.content, 30000),
-        source: m?.source ? toSafeString(m.source, 1) : undefined,
-        time: m?.time ? toSafeString(m.time, 20) : undefined,
-      }))
+    ? item.messages.slice(0, 500).map((m) => {
+        if (m?.type === "compare") {
+          return {
+            type: "compare",
+            displayOrder: Array.isArray(m.displayOrder) ? m.displayOrder : ["a", "b"],
+            voted: m.voted ? toSafeString(m.voted, 2) : undefined,
+            votedModel: m.votedModel ? toSafeString(m.votedModel, 200) : undefined,
+            responses: {
+              a: normalizeResponse(m.responses?.a),
+              b: normalizeResponse(m.responses?.b),
+            },
+          };
+        }
+        return {
+          role: ["user", "assistant"].includes(String(m?.role)) ? String(m.role) : "user",
+          content: toSafeText(m?.content, 30000),
+          source: m?.source ? toSafeString(m.source, 1) : undefined,
+          time: m?.time ? toSafeString(m.time, 20) : undefined,
+        };
+      })
     : [];
 
   return {

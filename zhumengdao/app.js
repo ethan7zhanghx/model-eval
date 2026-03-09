@@ -279,7 +279,7 @@ function renderHistoryList(sessions) {
   for (const s of sessions) {
     const item = document.createElement("div");
     item.className = "history-item";
-    const firstMsg = s.messages?.find((m) => m.role === "user");
+    const firstMsg = s.messages?.find((m) => m.role === "user" && m.type !== "compare");
     const preview = firstMsg ? shortText(firstMsg.content, 60) : "（空对话）";
     item.innerHTML = `
       <div class="history-item-title">${escapeHtml(s.roleName || "未知角色")}</div>
@@ -1100,7 +1100,9 @@ function buildTurnRecord(action, selected = "") {
     temperature: config.temperature,
     userText: state.pendingTurn.userText,
     // Full context before this turn (for analysis)
-    contextMessages: state.history.map((m) => ({ role: m.role, content: m.content })),
+    contextMessages: state.history
+      .filter((m) => m.type !== "compare")
+      .map((m) => ({ role: m.role, content: m.content })),
     apiA: {
       endpointHost: parseHost(config.endpointA),
       model: config.modelA,
