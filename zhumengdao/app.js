@@ -495,7 +495,7 @@ function persistConfig() {
   localStorage.setItem(LS_KEY_CONFIG, JSON.stringify(payload));
 }
 
-function hydrateConfig() {
+function hydrateConfig(serverDef = { a: {}, b: {} }) {
   let saved = {};
   try {
     const raw = localStorage.getItem(LS_KEY_CONFIG);
@@ -505,13 +505,24 @@ function hydrateConfig() {
     }
   } catch { saved = {}; }
 
+  // 如果 saved 里的 endpoint 是旧的内置默认值，视为未主动设置，让服务端默认值覆盖
+  const LEGACY_DEFAULTS = [
+    "https://openrouter.ai/api/v1/chat/completions",
+    "https://api.openai.com/v1/chat/completions",
+  ];
+  const userEndpointA = LEGACY_DEFAULTS.includes(saved.endpointA) ? "" : saved.endpointA;
+  const userEndpointB = LEGACY_DEFAULTS.includes(saved.endpointB) ? "" : saved.endpointB;
+  const userModelA = (saved.modelA === "openai/gpt-4o-mini" || saved.modelA === "gpt-4o-mini") ? "" : saved.modelA;
+  const userModelB = (saved.modelB === "openai/gpt-4o-mini" || saved.modelB === "gpt-4o-mini") ? "" : saved.modelB;
+
+  // 优先级：用户 localStorage > 服务端默认 > 代码内置 DEFAULT_CONFIG
   const config = {
     ...DEFAULT_CONFIG,
     ...saved,
-    endpointA: sanitizeEndpoint(saved.endpointA || DEFAULT_CONFIG.endpointA),
-    endpointB: sanitizeEndpoint(saved.endpointB || DEFAULT_CONFIG.endpointB),
-    modelA: sanitizeModel(saved.modelA || DEFAULT_CONFIG.modelA),
-    modelB: sanitizeModel(saved.modelB || DEFAULT_CONFIG.modelB),
+    endpointA: sanitizeEndpoint(userEndpointA || serverDef.a?.endpoint || DEFAULT_CONFIG.endpointA),
+    endpointB: sanitizeEndpoint(userEndpointB || serverDef.b?.endpoint || DEFAULT_CONFIG.endpointB),
+    modelA: sanitizeModel(userModelA || serverDef.a?.model || DEFAULT_CONFIG.modelA),
+    modelB: sanitizeModel(userModelB || serverDef.b?.model || DEFAULT_CONFIG.modelB),
     selectedRoleId: String(saved.selectedRoleId || ""),
     apiKeyA: saved.rememberKeys ? sanitizeKey(saved.apiKeyA) : "",
     apiKeyB: saved.rememberKeys ? sanitizeKey(saved.apiKeyB) : "",
@@ -1268,20 +1279,19 @@ async function init() {
 
   try {
     await loadRoles();
-    hydrateConfig();
 
-    // 拉服务端默认配置，填充用户未填写的 endpoint/model
+    // 先拉服务端默认配置，再 hydrate（服务端默认值优先于 DEFAULT_CONFIG，但低于用户 localStorage）
+    let serverDef = { a: {}, b: {} };
     try {
       const defRes = await fetch("/api/default-config");
       if (defRes.ok) {
         const def = await defRes.json();
+        serverDef = def;
         state.serverDefaultKeys = { a: !!def.a?.hasKey, b: !!def.b?.hasKey };
-        if (!el.endpointAInput.value && def.a?.endpoint) el.endpointAInput.value = def.a.endpoint;
-        if (!el.modelAInput.value && def.a?.model) el.modelAInput.value = def.a.model;
-        if (!el.endpointBInput.value && def.b?.endpoint) el.endpointBInput.value = def.b.endpoint;
-        if (!el.modelBInput.value && def.b?.model) el.modelBInput.value = def.b.model;
       }
     } catch { /* 拉不到默认配置不影响正常使用 */ }
+
+    hydrateConfig(serverDef);
     if (!el.roleSelect.value || !getSelectedRole()) el.roleSelect.value = state.roles[0].id;
     renderRolePreview();
     bindEvents();
