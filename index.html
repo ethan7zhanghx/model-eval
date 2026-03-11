@@ -6,158 +6,289 @@
   <title>模型评测平台</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-
   <div class="page-shell">
-
     <header class="app-header">
       <div class="brand">
         <span class="brand-icon">🧪</span>
-        <h1>模型评测平台<span class="brand-sub">Model Eval</span></h1>
+        <div>
+          <h1>Model Eval Workspace</h1>
+          <p class="brand-sub">模型快速评测、对比与实验构建工作台</p>
+        </div>
       </div>
       <div class="header-actions">
-        <a href="./zhumengdao/" class="ghost-btn" style="text-decoration:none">⛵ 筑梦岛</a>
-        <a href="./dashboard.html" class="ghost-btn" style="text-decoration:none">📊 数据看板</a>
-        <button id="saveConfigBtn" class="ghost-btn">保存配置</button>
-        <button id="runWorkflowBtn" class="primary">▶ 执行</button>
+        <a href="./zhumengdao/" class="ghost-btn action-link">⛵ 场景评测</a>
+        <a href="./dashboard.html" class="ghost-btn action-link">📊 数据看板</a>
+        <button id="saveConfigBtn" class="ghost-btn">保存实验草稿</button>
+        <button id="runWorkflowBtn" class="primary">▶ 启动运行</button>
       </div>
     </header>
 
-    <section class="panel config-panel">
-      <div class="panel-head">
-        <h2><span class="panel-icon">⚙️</span>全局配置</h2>
-        <p id="statusBar" class="status" style="margin:0"></p>
-      </div>
-      <div class="form-grid">
-        <label>
-          <span id="apiKeyLabel">OpenRouter API Key</span>
-          <input id="apiKeyInput" type="password" placeholder="sk-or-v1-..." autocomplete="off">
-        </label>
+    <div class="workspace-shell">
+      <aside class="workspace-sidebar">
+        <section class="sidebar-card sidebar-card-primary">
+          <p class="sidebar-label">Workspace Map</p>
+          <h2>当前主页面定位</h2>
+          <p class="sidebar-copy">主项目页面先聚焦“实验构建与运行准备”：统一设置模型、Prompt、评分策略和样本输入；场景化模拟评测仍通过独立入口承接。</p>
+          <nav class="section-nav" aria-label="页面导航">
+            <a class="section-link" href="#overview">概览</a>
+            <a class="section-link" href="#section-config">实验上下文</a>
+            <a class="section-link" href="#section-models">参与模型</a>
+            <a class="section-link" href="#section-scoring">评分策略</a>
+            <a class="section-link" href="#section-cases">样本工作区</a>
+            <a class="section-link" href="#section-history">历史草稿</a>
+          </nav>
+        </section>
 
-        <label>
-          <span>接口来源</span>
-          <select id="providerSelect">
-            <option value="openrouter">OpenRouter（官方模型列表）</option>
-            <option value="custom">自定义接口（手动输入模型）</option>
-          </select>
-        </label>
+        <section class="sidebar-card">
+          <p class="sidebar-label">产品视角</p>
+          <ul class="sidebar-points">
+            <li>标准评测：围绕数据集、评分方式和批量 run 去做模型对比。</li>
+            <li>场景评测：通过 `zhumengdao` 等模拟 App 工作台完成主观体验盲测。</li>
+            <li>当前页面：优先把“实验设置 -> 评分准备 -> 样本执行”这一条主链路做清晰。</li>
+          </ul>
+        </section>
 
-        <label>
-          <span>Temperature</span>
-          <input id="temperatureInput" type="number" value="0" min="0" max="2" step="0.1">
-        </label>
+        <section class="sidebar-card sidebar-card-muted">
+          <p class="sidebar-label">快速入口</p>
+          <div class="sidebar-links">
+            <a href="./dashboard.html" class="ghost-btn action-link">查看历史结果</a>
+            <a href="./zhumengdao/" class="ghost-btn action-link">进入场景评测</a>
+          </div>
+        </section>
+      </aside>
 
-        <label id="baseUrlRow" class="full-span hidden">
-          <span>Base URL（chat completions 接口）</span>
-          <input id="baseUrlInput" type="text" placeholder="https://api.openai.com/v1/chat/completions" autocomplete="off">
-        </label>
+      <main class="workspace-main">
+        <section class="panel hero-panel" id="overview">
+          <div class="hero-head">
+            <div class="hero-copy-block">
+              <p class="hero-eyebrow">Experiment Builder</p>
+              <div class="hero-title-row">
+                <h2 class="hero-title">把主页面收敛成一个清晰的评测工作台</h2>
+              </div>
+              <p class="hero-copy">这里不再试图把所有平台能力堆成一个长页面，而是先把“实验上下文、参与模型、评分策略、样本工作区”四个核心区块建立出来。后续的数据集、Run 详情、分析页和报告页会逐步拆成独立页面。</p>
+              <div class="hero-badges" aria-label="当前能力标签">
+                <span class="hero-badge">Batch Eval 准备区</span>
+                <span class="hero-badge">多模型并排对照</span>
+                <span class="hero-badge">连续多轮工作流</span>
+                <span class="hero-badge">场景评测独立入口</span>
+              </div>
+            </div>
+            <div class="hero-status-box">
+              <div class="hero-status-head">
+                <span class="hero-status-label">运行状态</span>
+                <span class="hero-status-note">当前页面聚焦配置与执行准备</span>
+              </div>
+              <p id="statusBar" class="status">等待开始：请选择模型、填写 Prompt，或从历史草稿继续。</p>
+            </div>
+          </div>
 
-        <label class="checkbox-row">
-          <input id="rememberKeyInput" type="checkbox">
-          <span>记住 API Key（浏览器本地缓存）</span>
-        </label>
+          <div class="summary-grid" aria-label="当前实验摘要">
+            <article class="summary-card">
+              <span class="summary-label">接口来源</span>
+              <strong id="summaryProvider" class="summary-value">OpenRouter</strong>
+              <span class="summary-note">当前全局接口模式</span>
+            </article>
+            <article class="summary-card">
+              <span class="summary-label">参与模型</span>
+              <strong id="summaryModels" class="summary-value">0</strong>
+              <span class="summary-note">当前已选择的模型列</span>
+            </article>
+            <article class="summary-card">
+              <span class="summary-label">样本环节</span>
+              <strong id="summaryCases" class="summary-value">0</strong>
+              <span class="summary-note">已填写的有效 Prompt</span>
+            </article>
+            <article class="summary-card">
+              <span class="summary-label">工作流模式</span>
+              <strong id="summaryMode" class="summary-value">待配置</strong>
+              <span class="summary-note">当前页面执行语义</span>
+            </article>
+            <article class="summary-card">
+              <span class="summary-label">草稿数量</span>
+              <strong id="summaryHistory" class="summary-value">0</strong>
+              <span class="summary-note">已保存的历史配置</span>
+            </article>
+            <article class="summary-card summary-card-highlight">
+              <span class="summary-label">准备状态</span>
+              <strong id="summaryState" class="summary-value">待配置</strong>
+              <span class="summary-note">是否可以直接启动运行</span>
+            </article>
+          </div>
+        </section>
 
-        <label class="full-span">
-          <span>System Prompt</span>
-          <textarea id="systemPromptInput" rows="3"></textarea>
-        </label>
-      </div>
-      <div class="cost-estimate-row">
-        <label class="cost-estimate-input">
-          <span>输出 Token 估算系数</span>
-          <input id="outputTokenRatioInput" type="number" value="1.0" min="0.1" max="4" step="0.1">
-        </label>
-        <p id="costSummary" class="status">预估总花费：等待输入 Prompt 与模型</p>
-      </div>
-    </section>
+        <section class="workspace-stage">
+          <div class="section-heading">
+            <p class="section-label">01 / 实验设置与运行准备</p>
+            <h2>左侧收纳上下文与模型资产，右侧聚焦评分和样本工作区</h2>
+            <p class="section-copy">这样做的目的是让用户先理解：哪些是实验的长期配置，哪些是这次运行的即时输入，哪些会影响后续评分和结果解读。</p>
+          </div>
 
-    <section class="panel model-panel">
-      <div class="panel-head">
-        <h2><span class="panel-icon">🤖</span>模型列配置</h2>
-        <div class="actions-inline">
-          <button id="refreshModelsBtn" class="ghost-btn">刷新模型列表</button>
-          <button id="addModelColBtn" class="primary">+ 添加模型列</button>
-        </div>
-      </div>
-      <p id="modelMeta" class="hint">正在加载官方模型列表...</p>
-      <div id="modelColumns" class="model-columns"></div>
-    </section>
+          <div class="workbench-grid">
+            <div class="setup-column">
+              <section class="panel config-panel" id="section-config">
+                <div class="panel-head">
+                  <div>
+                    <p class="panel-kicker">Experiment Context</p>
+                    <h2><span class="panel-icon">⚙️</span>实验上下文</h2>
+                  </div>
+                </div>
+                <p class="panel-head-copy">统一设置 Provider、全局 System Prompt 与运行参数，让本次实验具备可复现的上下文边界。</p>
+                <div class="form-grid">
+                  <label>
+                    <span id="apiKeyLabel">OpenRouter API Key</span>
+                    <input id="apiKeyInput" type="password" placeholder="sk-or-v1-..." autocomplete="off">
+                  </label>
 
-    <section class="panel history-panel">
-      <div class="panel-head">
-        <h2><span class="panel-icon">🕘</span>配置历史</h2>
-        <div class="actions-inline">
-          <button id="clearHistoryBtn" class="ghost-btn">清空历史</button>
-        </div>
-      </div>
-      <p class="hint">保存模型列、System Prompt、Temperature、环节 Prompt。</p>
-      <div id="historyList" class="history-list"></div>
-    </section>
+                  <label>
+                    <span>接口来源</span>
+                    <select id="providerSelect">
+                      <option value="openrouter">OpenRouter（官方模型列表）</option>
+                      <option value="custom">自定义接口（手动输入模型）</option>
+                    </select>
+                  </label>
 
-    <section class="panel judge-panel" id="judgeSection">
-      <div class="panel-head">
-        <h2><span class="panel-icon">🏅</span>评分配置</h2>
-        <div class="actions-inline">
-          <button id="runJudgeBtn" class="primary">运行 Judge 评分</button>
-        </div>
-      </div>
-      <div class="score-method-row">
-        <label>
-          <span>评分方式</span>
-          <select id="globalScoreMethod">
-            <option value="none">不评分</option>
-            <option value="exact">精确匹配（需参考答案）</option>
-            <option value="judge">LLM Judge</option>
-          </select>
-        </label>
-        <p class="hint" style="margin:0">精确匹配：参考答案在每行 Prompt 列下方填写，或通过数据集导入自动填入。</p>
-      </div>
-      <div id="judgeConfig" class="hidden">
-        <div class="form-grid judge-form-grid">
-          <label>
-            <span>Judge 模型 ID</span>
-            <input id="judgeModelInput" type="text" placeholder="例如 openai/gpt-4o-mini" autocomplete="off">
-          </label>
-          <label class="full-span">
-            <span>Judge Prompt 模板 <small>（变量：{{prompt}} {{response}} {{reference}}）</small></span>
-            <textarea id="judgePromptInput" rows="6"></textarea>
-          </label>
-        </div>
-      </div>
-      <div id="scoreSummary" class="score-summary"></div>
-    </section>
+                  <label>
+                    <span>Temperature</span>
+                    <input id="temperatureInput" type="number" value="0" min="0" max="2" step="0.1">
+                  </label>
 
-    <section class="panel table-panel">
-      <div class="panel-head">
-        <h2><span class="panel-icon">📋</span>测试用例</h2>
-        <div class="actions-inline">
-          <button id="importDatasetBtn" class="primary">导入数据集</button>
-          <button id="importPromptBtn" class="ghost-btn">导入 md/txt</button>
-          <button id="addRowBtn" class="ghost-btn">+ 新增</button>
-          <button id="clearRowsBtn" class="ghost-btn">清空</button>
-        </div>
-      </div>
-      <div class="actions">
-        <button id="clearResultsBtn" class="ghost-btn">清空结果</button>
-        <button id="exportBtn" class="ghost-btn">导出 JSON</button>
-      </div>
-      <input id="promptFileInput" type="file" accept=".md,.txt,text/markdown,text/plain" hidden>
-      <input id="datasetFileInput" type="file" accept=".csv,.json,.xlsx" hidden>
-      <p class="hint">数据集模式：导入 CSV / JSON / XLSX，选择 Q/A 列后批量跑。多轮对话模式：手动填写或导入 md/txt。</p>
+                  <label id="baseUrlRow" class="full-span hidden">
+                    <span>Base URL（chat completions 接口）</span>
+                    <input id="baseUrlInput" type="text" placeholder="https://api.openai.com/v1/chat/completions" autocomplete="off">
+                  </label>
 
-      <div class="table-wrap">
-        <table id="caseTable">
-          <thead id="caseTableHead"></thead>
-          <tbody id="caseTableBody"></tbody>
-        </table>
-      </div>
-    </section>
-  </div><!-- /.page-shell -->
+                  <label class="checkbox-row">
+                    <input id="rememberKeyInput" type="checkbox">
+                    <span>记住 API Key（浏览器本地缓存）</span>
+                  </label>
 
-  <!-- Column mapping modal -->
+                  <label class="full-span">
+                    <span>System Prompt</span>
+                    <textarea id="systemPromptInput" rows="4" placeholder="输入本次实验共用的 System Prompt"></textarea>
+                  </label>
+                </div>
+                <div class="cost-estimate-row">
+                  <label class="cost-estimate-input">
+                    <span>输出 Token 估算系数</span>
+                    <input id="outputTokenRatioInput" type="number" value="1.0" min="0.1" max="4" step="0.1">
+                  </label>
+                  <p id="costSummary" class="status">预估总花费：等待输入 Prompt 与模型</p>
+                </div>
+              </section>
+
+              <section class="panel model-panel" id="section-models">
+                <div class="panel-head">
+                  <div>
+                    <p class="panel-kicker">Participants</p>
+                    <h2><span class="panel-icon">🤖</span>参与模型</h2>
+                  </div>
+                  <div class="actions-inline">
+                    <button id="refreshModelsBtn" class="ghost-btn">刷新模型列表</button>
+                    <button id="addModelColBtn" class="primary">+ 添加模型列</button>
+                  </div>
+                </div>
+                <p class="panel-head-copy">模型区强调“本次 run 的比较对象”。后续会继续升级为可复用的模型 preset 与 baseline 管理。</p>
+                <p id="modelMeta" class="hint">正在加载官方模型列表...</p>
+                <div id="modelColumns" class="model-columns"></div>
+              </section>
+
+              <section class="panel history-panel" id="section-history">
+                <div class="panel-head">
+                  <div>
+                    <p class="panel-kicker">Drafts</p>
+                    <h2><span class="panel-icon">🕘</span>历史草稿</h2>
+                  </div>
+                  <div class="actions-inline">
+                    <button id="clearHistoryBtn" class="ghost-btn">清空历史</button>
+                  </div>
+                </div>
+                <p class="panel-head-copy">这里保留“继续上次配置”的能力，帮助用户在未来过渡到 Experiment 模板与 Run 历史之前，不丢失当前工作上下文。</p>
+                <div id="historyList" class="history-list"></div>
+              </section>
+            </div>
+
+            <div class="execution-column">
+              <section class="panel judge-panel" id="section-scoring">
+                <div class="panel-head">
+                  <div>
+                    <p class="panel-kicker">Scoring Plan</p>
+                    <h2><span class="panel-icon">🏅</span>评分策略</h2>
+                  </div>
+                  <div class="actions-inline">
+                    <button id="runJudgeBtn" class="primary">运行 Judge 评分</button>
+                  </div>
+                </div>
+                <p class="panel-head-copy">评分区在产品上承担“定义如何判断优劣”的角色。当前页面先统一放在样本工作区上方，后续会独立成评分中心。</p>
+                <div class="score-method-row">
+                  <label>
+                    <span>评分方式</span>
+                    <select id="globalScoreMethod">
+                      <option value="none">不评分</option>
+                      <option value="exact">精确匹配（需参考答案）</option>
+                      <option value="judge">LLM Judge</option>
+                    </select>
+                  </label>
+                  <p class="hint">精确匹配：参考答案在每行 Prompt 列下方填写，或通过数据集导入自动填入。</p>
+                </div>
+                <div id="judgeConfig" class="hidden">
+                  <div class="form-grid judge-form-grid">
+                    <label>
+                      <span>Judge 模型 ID</span>
+                      <input id="judgeModelInput" type="text" placeholder="例如 openai/gpt-4o-mini" autocomplete="off">
+                    </label>
+                    <label class="full-span">
+                      <span>Judge Prompt 模板 <small>（变量：{{prompt}} {{response}} {{reference}}）</small></span>
+                      <textarea id="judgePromptInput" rows="6"></textarea>
+                    </label>
+                  </div>
+                </div>
+                <div id="scoreSummary" class="score-summary"></div>
+              </section>
+
+              <section class="panel table-panel" id="section-cases">
+                <div class="panel-head panel-head-stacked">
+                  <div>
+                    <p class="panel-kicker">Sample Workspace</p>
+                    <h2><span class="panel-icon">📋</span>样本工作区</h2>
+                  </div>
+                  <p class="panel-head-copy">这是当前主页面的核心区域。无论是批量样本导入，还是手动撰写多轮 Prompt，最终都会在这里形成“输入 - 输出 - 对照”的工作表。</p>
+                </div>
+
+                <div class="table-toolbar">
+                  <div class="table-toolbar-primary actions-inline">
+                    <button id="importDatasetBtn" class="primary">导入数据集</button>
+                    <button id="importPromptBtn" class="ghost-btn">导入 md/txt</button>
+                    <button id="addRowBtn" class="ghost-btn">+ 新增</button>
+                    <button id="clearRowsBtn" class="ghost-btn">清空</button>
+                  </div>
+                  <div class="table-toolbar-secondary actions-inline">
+                    <button id="clearResultsBtn" class="ghost-btn">清空结果</button>
+                    <button id="exportBtn" class="ghost-btn">导出 JSON</button>
+                  </div>
+                </div>
+
+                <input id="promptFileInput" type="file" accept=".md,.txt,text/markdown,text/plain" hidden>
+                <input id="datasetFileInput" type="file" accept=".csv,.json,.xlsx" hidden>
+                <p class="hint">数据集模式：导入 CSV / JSON / XLSX，选择 Q/A 列后批量跑。多轮对话模式：手动填写或导入 md/txt。当前工作流默认按“连续多轮”语义执行。</p>
+
+                <div class="table-wrap">
+                  <table id="caseTable">
+                    <thead id="caseTableHead"></thead>
+                    <tbody id="caseTableBody"></tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
   <div id="columnMapModal" class="modal-overlay hidden">
     <div class="modal-card">
       <h2>列映射配置</h2>

@@ -62,6 +62,12 @@ const el = {
   clearRowsBtn: document.getElementById("clearRowsBtn"),
   caseTableHead: document.getElementById("caseTableHead"),
   caseTableBody: document.getElementById("caseTableBody"),
+  summaryProvider: document.getElementById("summaryProvider"),
+  summaryModels: document.getElementById("summaryModels"),
+  summaryCases: document.getElementById("summaryCases"),
+  summaryMode: document.getElementById("summaryMode"),
+  summaryHistory: document.getElementById("summaryHistory"),
+  summaryState: document.getElementById("summaryState"),
 };
 
 let rowIdSeed = 1;
@@ -138,6 +144,29 @@ function setModelMeta(text, type = "normal") {
   if (type === "ok" || type === "err") {
     el.modelMeta.classList.add(type);
   }
+}
+
+function updateWorkbenchSummary() {
+  const modelCount = getSelectedModels().length;
+  const promptCount = state.rows.filter((row) => row.prompt.trim()).length;
+  const providerText = isUsingOpenRouter() ? "OpenRouter" : "自定义接口";
+  const modeText = promptCount > 1 ? "连续多轮" : promptCount === 1 ? "单轮输入" : "待配置";
+
+  let stateText = "待配置";
+  if (state.running) {
+    stateText = "执行中";
+  } else if (modelCount > 0 && promptCount > 0) {
+    stateText = "可执行";
+  } else if (modelCount > 0 || promptCount > 0) {
+    stateText = "待补全";
+  }
+
+  if (el.summaryProvider) el.summaryProvider.textContent = providerText;
+  if (el.summaryModels) el.summaryModels.textContent = String(modelCount);
+  if (el.summaryCases) el.summaryCases.textContent = String(promptCount);
+  if (el.summaryMode) el.summaryMode.textContent = modeText;
+  if (el.summaryHistory) el.summaryHistory.textContent = String(state.configHistory.length);
+  if (el.summaryState) el.summaryState.textContent = stateText;
 }
 
 function normalizeContent(content) {
@@ -335,11 +364,13 @@ function updateProviderUI() {
 
   if (usingOpenRouter) {
     el.refreshModelsBtn.disabled = state.running;
+    updateWorkbenchSummary();
     return;
   }
 
   el.refreshModelsBtn.disabled = true;
   setModelMeta("当前是自定义接口模式：请在每个模型列手动输入模型 ID。", "ok");
+  updateWorkbenchSummary();
 }
 
 function handleProviderChanged(options = {}) {
@@ -637,6 +668,7 @@ function renderHistoryList() {
     empty.className = "history-empty";
     empty.textContent = "暂无历史配置。点击“保存当前配置”创建第一条记录。";
     el.historyList.appendChild(empty);
+    updateWorkbenchSummary();
     return;
   }
 
@@ -686,6 +718,8 @@ function renderHistoryList() {
 
     el.historyList.appendChild(card);
   }
+
+  updateWorkbenchSummary();
 }
 
 function saveCurrentConfig(options = {}) {
@@ -1018,6 +1052,7 @@ function renderModelColumns() {
   }
 
   renderCostEstimate();
+  updateWorkbenchSummary();
 }
 
 function ensureModelColumns() {
@@ -1115,6 +1150,7 @@ function renderCaseTableBody() {
   });
 
   renderCostEstimate();
+  updateWorkbenchSummary();
 }
 
 function fillResponseCell(cell, row, modelId) {
@@ -1179,6 +1215,7 @@ function setBusy(running) {
   renderCaseTableBody();
   renderHistoryList();
   updateProviderUI();
+  updateWorkbenchSummary();
 }
 
 function buildInitialHistory(systemPrompt) {
@@ -1476,6 +1513,7 @@ function init() {
   renderModelColumns();
   renderCaseTable();
   renderHistoryList();
+  updateWorkbenchSummary();
 
   void loadConfigHistoryFromServer({ silent: true });
   void loadOfficialModels(false);
