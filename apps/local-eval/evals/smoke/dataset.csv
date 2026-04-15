@@ -1,0 +1,3 @@
+input,expected
+"Say hello in one short sentence.","hello"
+"What is 2 + 2?","4"

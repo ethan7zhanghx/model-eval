@@ -1,11 +1,41 @@
 const OPENROUTER_CHAT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_MODELS_ENDPOINT = "https://openrouter.ai/api/v1/models";
 const HISTORY_API_ENDPOINT = "/api/config-history";
+const EXPERIMENTS_API_ENDPOINT = "/api/experiments";
+const RUNS_API_ENDPOINT = "/api/runs";
+const DEFAULT_WORKSPACE_ID = "ws-default";
+const DEFAULT_PROJECT_ID = "proj-default";
 const HISTORY_NAMESPACE = "default";
 
 const PROVIDER_OPENROUTER = "openrouter";
 const PROVIDER_CUSTOM = "custom";
 const DEFAULT_CUSTOM_BASE_URL = "https://api.openai.com/v1/chat/completions";
+const EVAL_TYPE_SINGLE_TURN = "single_turn";
+const EVAL_TYPE_MULTI_TURN = "multi_turn";
+const EVAL_TYPE_SCENARIO = "scenario";
+const SOURCE_TYPE_MANUAL = "manual_prompt";
+const SOURCE_TYPE_PROMPT_FILE = "prompt_file";
+const SOURCE_TYPE_DATASET = "dataset_import";
+const SOURCE_TYPE_SCENARIO = "scenario_session";
+const SCORE_METHOD_NONE = "none";
+const SCORE_METHOD_EXACT = "exact";
+const SCORE_METHOD_JUDGE = "judge";
+const MAX_MANUAL_SCORE = 5;
+const DEFAULT_JUDGE_MODEL = "openai/gpt-4o-mini";
+const DEFAULT_JUDGE_PROMPT = [
+  "你是一名严格但公正的评测裁判。请基于用户问题、模型回答、参考答案给出 0-5 分评分。",
+  "请仅输出 JSON，不要输出解释性前缀或 Markdown 代码块。",
+  '{"score": 0-5, "accuracy": 0-5, "completeness": 0-5, "fluency": 0-5, "reason": "简短中文理由"}',
+  "",
+  "[Prompt]",
+  "{{prompt}}",
+  "",
+  "[Response]",
+  "{{response}}",
+  "",
+  "[Reference]",
+  "{{reference}}",
+].join("\n");
 
 const LS_KEY_API = "or-comparator-api-key";
 const LS_KEY_PROVIDER = "or-comparator-provider-v1";
@@ -13,6 +43,7 @@ const LS_KEY_CUSTOM_BASE_URL = "or-comparator-custom-base-url-v1";
 const LS_KEY_MODELS_CACHE = "or-comparator-models-cache-v1";
 const LS_KEY_HISTORY_BACKUP = "or-comparator-history-backup-v1";
 const LS_KEY_HISTORY_LEGACY = "or-comparator-config-history-v1";
+const LS_KEY_PAGE_CONTEXT = "or-comparator-page-context-v1";
 
 const MODEL_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const MAX_CONFIG_HISTORY = 30;
@@ -28,12 +59,31 @@ const state = {
   selectedModels: ["", ""],
   rows: [],
   running: false,
+  judgeRunning: false,
   modelSyncedAt: null,
   configHistory: [],
+  currentWorkspaceId: DEFAULT_WORKSPACE_ID,
+  currentProjectId: DEFAULT_PROJECT_ID,
+  currentEvalType: EVAL_TYPE_SINGLE_TURN,
+  currentSourceType: SOURCE_TYPE_MANUAL,
+  currentExperimentId: null,
+  currentExperimentTitle: "未保存",
+  currentExperimentStatus: "draft",
+  currentExperimentUpdatedAt: null,
+  currentRunId: null,
+  currentRunStatus: null,
+  currentRunUpdatedAt: null,
+  currentRunCompletedAt: null,
+  scenarioSessions: [],
+  scenarioSessionsScopeKey: "",
+  scenarioSessionsLoading: false,
 };
 
 const el = {
   providerSelect: document.getElementById("providerSelect"),
+  evalTypeSelect: document.getElementById("evalTypeSelect"),
+  sourceTypeSelect: document.getElementById("sourceTypeSelect"),
+  evalModeHint: document.getElementById("evalModeHint"),
   baseUrlRow: document.getElementById("baseUrlRow"),
   baseUrlInput: document.getElementById("baseUrlInput"),
   apiKeyLabel: document.getElementById("apiKeyLabel"),
@@ -42,6 +92,12 @@ const el = {
   rememberKeyInput: document.getElementById("rememberKeyInput"),
   systemPromptInput: document.getElementById("systemPromptInput"),
   outputTokenRatioInput: document.getElementById("outputTokenRatioInput"),
+  runJudgeBtn: document.getElementById("runJudgeBtn"),
+  globalScoreMethod: document.getElementById("globalScoreMethod"),
+  judgeConfig: document.getElementById("judgeConfig"),
+  judgeModelInput: document.getElementById("judgeModelInput"),
+  judgePromptInput: document.getElementById("judgePromptInput"),
+  scoreSummary: document.getElementById("scoreSummary"),
   runWorkflowBtn: document.getElementById("runWorkflowBtn"),
   clearResultsBtn: document.getElementById("clearResultsBtn"),
   exportBtn: document.getElementById("exportBtn"),
@@ -53,8 +109,12 @@ const el = {
   modelColumns: document.getElementById("modelColumns"),
   modelColumnTemplate: document.getElementById("modelColumnTemplate"),
   saveConfigBtn: document.getElementById("saveConfigBtn"),
+  openScenarioWorkbenchLink: document.getElementById("openScenarioWorkbenchLink"),
+  openScenarioArchiveLink: document.getElementById("openScenarioArchiveLink"),
+  refreshScenarioSessionsBtn: document.getElementById("refreshScenarioSessionsBtn"),
   clearHistoryBtn: document.getElementById("clearHistoryBtn"),
   historyList: document.getElementById("historyList"),
+  scenarioSessionsList: document.getElementById("scenarioSessionsList"),
   historyItemTemplate: document.getElementById("historyItemTemplate"),
   importPromptBtn: document.getElementById("importPromptBtn"),
   promptFileInput: document.getElementById("promptFileInput"),
@@ -68,10 +128,19 @@ const el = {
   summaryMode: document.getElementById("summaryMode"),
   summaryHistory: document.getElementById("summaryHistory"),
   summaryState: document.getElementById("summaryState"),
+  currentExperimentTitle: document.getElementById("currentExperimentTitle"),
+  currentExperimentMeta: document.getElementById("currentExperimentMeta"),
+  currentExperimentStatus: document.getElementById("currentExperimentStatus"),
+  currentExperimentUpdatedAt: document.getElementById("currentExperimentUpdatedAt"),
+  currentRunLabel: document.getElementById("currentRunLabel"),
+  currentRunMeta: document.getElementById("currentRunMeta"),
+  currentRunStatus: document.getElementById("currentRunStatus"),
+  currentRunUpdatedAt: document.getElementById("currentRunUpdatedAt"),
 };
 
 let rowIdSeed = 1;
 let historySyncQueue = Promise.resolve();
+let runSyncQueue = Promise.resolve();
 
 class ApiError extends Error {
   constructor(message, options = {}) {
@@ -83,11 +152,12 @@ class ApiError extends Error {
   }
 }
 
-function createRow(prompt = "") {
+function createRow(prompt = "", options = {}) {
   return {
     id: rowIdSeed++,
     prompt,
-    results: {},
+    scoreRef: typeof options.scoreRef === "string" ? options.scoreRef : "",
+    results: options.results && typeof options.results === "object" ? { ...options.results } : {},
   };
 }
 
@@ -111,8 +181,160 @@ function normalizeProvider(value) {
   return value === PROVIDER_CUSTOM ? PROVIDER_CUSTOM : PROVIDER_OPENROUTER;
 }
 
+function normalizeEvalType(value) {
+  if ([EVAL_TYPE_SINGLE_TURN, EVAL_TYPE_MULTI_TURN, EVAL_TYPE_SCENARIO].includes(value)) {
+    return value;
+  }
+  return EVAL_TYPE_SINGLE_TURN;
+}
+
+function normalizeSourceType(value) {
+  if ([SOURCE_TYPE_MANUAL, SOURCE_TYPE_PROMPT_FILE, SOURCE_TYPE_DATASET, SOURCE_TYPE_SCENARIO].includes(value)) {
+    return value;
+  }
+  return SOURCE_TYPE_MANUAL;
+}
+
+function getEvalTypeLabel(value) {
+  return ({
+    [EVAL_TYPE_SINGLE_TURN]: "单轮样本",
+    [EVAL_TYPE_MULTI_TURN]: "多轮对话",
+    [EVAL_TYPE_SCENARIO]: "场景模拟",
+  })[normalizeEvalType(value)] || "单轮样本";
+}
+
+function getSourceTypeLabel(value) {
+  return ({
+    [SOURCE_TYPE_MANUAL]: "手动输入",
+    [SOURCE_TYPE_PROMPT_FILE]: "文本导入",
+    [SOURCE_TYPE_DATASET]: "数据集导入",
+    [SOURCE_TYPE_SCENARIO]: "场景工作台",
+  })[normalizeSourceType(value)] || "手动输入";
+}
+
+function normalizeScoreMethod(value) {
+  if ([SCORE_METHOD_NONE, SCORE_METHOD_EXACT, SCORE_METHOD_JUDGE].includes(value)) {
+    return value;
+  }
+  return SCORE_METHOD_NONE;
+}
+
+function getScoreMethodLabel(value) {
+  return ({
+    [SCORE_METHOD_NONE]: "不评分",
+    [SCORE_METHOD_EXACT]: "精确匹配",
+    [SCORE_METHOD_JUDGE]: "LLM Judge",
+  })[normalizeScoreMethod(value)] || "不评分";
+}
+
+function getCurrentScoreConfig() {
+  return {
+    scoreMethod: normalizeScoreMethod(el.globalScoreMethod?.value),
+    judgeModel: String(el.judgeModelInput?.value || "").trim(),
+    judgePrompt: String(el.judgePromptInput?.value || "").trim() || DEFAULT_JUDGE_PROMPT,
+  };
+}
+
+function applyScoreConfigToForm(config = {}) {
+  const scoreMethod = normalizeScoreMethod(config.scoreMethod);
+  if (el.globalScoreMethod) {
+    el.globalScoreMethod.value = scoreMethod;
+  }
+  if (el.judgeModelInput) {
+    el.judgeModelInput.value = String(config.judgeModel || config.judgeModelId || "").trim() || DEFAULT_JUDGE_MODEL;
+  }
+  if (el.judgePromptInput) {
+    el.judgePromptInput.value = String(config.judgePrompt || config.judgePromptTemplate || "").trim() || DEFAULT_JUDGE_PROMPT;
+  }
+}
+
+function isScenarioMode() {
+  return normalizeEvalType(state.currentEvalType) === EVAL_TYPE_SCENARIO
+    || normalizeSourceType(state.currentSourceType) === SOURCE_TYPE_SCENARIO;
+}
+
+function syncExperimentModeState(options = {}) {
+  const { prefer = "none" } = options;
+
+  state.currentEvalType = normalizeEvalType(state.currentEvalType);
+  state.currentSourceType = normalizeSourceType(state.currentSourceType);
+
+  if (prefer === "eval" && state.currentEvalType !== EVAL_TYPE_SCENARIO && state.currentSourceType === SOURCE_TYPE_SCENARIO) {
+    state.currentSourceType = SOURCE_TYPE_MANUAL;
+  }
+
+  if (prefer === "source" && state.currentSourceType !== SOURCE_TYPE_SCENARIO && state.currentEvalType === EVAL_TYPE_SCENARIO) {
+    state.currentEvalType = EVAL_TYPE_SINGLE_TURN;
+  }
+
+  if (state.currentSourceType === SOURCE_TYPE_SCENARIO) {
+    state.currentEvalType = EVAL_TYPE_SCENARIO;
+  }
+
+  if (state.currentEvalType === EVAL_TYPE_SCENARIO) {
+    state.currentSourceType = SOURCE_TYPE_SCENARIO;
+  }
+}
+
+function getEvalModeHintText() {
+  syncExperimentModeState();
+
+  if (isScenarioMode()) {
+    return "场景模拟评测请在“场景评测”工作台执行；当前页主要负责统一对象归档、Run 关联与会话回跳。";
+  }
+
+  if (state.currentSourceType === SOURCE_TYPE_DATASET) {
+    return "当前会把这次实验标记为“数据集导入”；后续 M1.2 会继续补齐 Dataset Version 与可复用资产能力。";
+  }
+
+  if (state.currentSourceType === SOURCE_TYPE_PROMPT_FILE) {
+    return state.currentEvalType === EVAL_TYPE_MULTI_TURN
+      ? "文本导入 + 多轮模式：会按行顺序串联上下文，适合连续对话或逐步追问。"
+      : "文本导入 + 单轮模式：会把导入后的每一行视为独立样本，适合批量对比短问答。";
+  }
+
+  if (state.currentEvalType === EVAL_TYPE_MULTI_TURN) {
+    return "多轮对话评测会把每一行作为一个连续环节，后续轮次会继承前面的用户输入与模型回答。";
+  }
+
+  return "单轮样本评测会把每一行视为独立样本，适合批量 prompt 对比；手动输入时可以逐条增删样本。";
+}
+
+function renderExperimentModeControls() {
+  syncExperimentModeState();
+
+  if (el.evalTypeSelect) {
+    el.evalTypeSelect.value = normalizeEvalType(state.currentEvalType);
+  }
+
+  if (el.sourceTypeSelect) {
+    el.sourceTypeSelect.value = normalizeSourceType(state.currentSourceType);
+  }
+
+  if (el.evalModeHint) {
+    el.evalModeHint.textContent = getEvalModeHintText();
+  }
+}
+
+function getRowUnitLabel() {
+  if (state.currentEvalType === EVAL_TYPE_MULTI_TURN) return "环节";
+  if (state.currentEvalType === EVAL_TYPE_SCENARIO) return "步骤";
+  return "样本";
+}
+
+function getPromptPlaceholder(index) {
+  const label = getRowUnitLabel();
+  if (state.currentEvalType === EVAL_TYPE_MULTI_TURN) {
+    return `输入第 ${index + 1} 个${label} Prompt`;
+  }
+  if (state.currentEvalType === EVAL_TYPE_SCENARIO) {
+    return `当前为场景模式：建议转到场景工作台维护第 ${index + 1} 个${label}`;
+  }
+  return `输入第 ${index + 1} 条${label} Prompt`;
+}
+
 function getHistoryNamespace() {
-  return HISTORY_NAMESPACE;
+  return state.currentProjectId || HISTORY_NAMESPACE;
 }
 
 function isUsingOpenRouter() {
@@ -150,11 +372,16 @@ function updateWorkbenchSummary() {
   const modelCount = getSelectedModels().length;
   const promptCount = state.rows.filter((row) => row.prompt.trim()).length;
   const providerText = isUsingOpenRouter() ? "OpenRouter" : "自定义接口";
-  const modeText = promptCount > 1 ? "连续多轮" : promptCount === 1 ? "单轮输入" : "待配置";
+  syncExperimentModeState();
+  const modeText = `${getEvalTypeLabel(state.currentEvalType)} · ${getSourceTypeLabel(state.currentSourceType)}`;
 
   let stateText = "待配置";
   if (state.running) {
     stateText = "执行中";
+  } else if (state.judgeRunning) {
+    stateText = "Judge 评分中";
+  } else if (isScenarioMode()) {
+    stateText = "场景跳转";
   } else if (modelCount > 0 && promptCount > 0) {
     stateText = "可执行";
   } else if (modelCount > 0 || promptCount > 0) {
@@ -167,6 +394,128 @@ function updateWorkbenchSummary() {
   if (el.summaryMode) el.summaryMode.textContent = modeText;
   if (el.summaryHistory) el.summaryHistory.textContent = String(state.configHistory.length);
   if (el.summaryState) el.summaryState.textContent = stateText;
+  renderEntityState();
+}
+
+function clampScore(value, max = MAX_MANUAL_SCORE) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.max(0, Math.min(max, Number(num.toFixed(3))));
+}
+
+function normalizeComparableText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function isScorableResult(result) {
+  return !!result && !result.skipped && (!!result.ok || !!String(result.content || "").trim());
+}
+
+function applyExactScoreToResult(result, reference) {
+  if (!result || !isScorableResult(result)) return null;
+  const normalizedReference = normalizeComparableText(reference);
+  if (!normalizedReference) {
+    result.ruleScore = null;
+    return null;
+  }
+  result.ruleScore = normalizeComparableText(result.content) === normalizedReference ? 1 : 0;
+  return result.ruleScore;
+}
+
+function applyExactScoresForRows(rows = state.rows) {
+  for (const row of rows) {
+    for (const result of Object.values(row.results || {})) {
+      applyExactScoreToResult(result, row.scoreRef || "");
+    }
+  }
+}
+
+function buildScoreSummaryText() {
+  const scoreConfig = getCurrentScoreConfig();
+  const stats = new Map();
+  const rowsWithReference = state.rows.filter((row) => String(row.scoreRef || "").trim()).length;
+
+  for (const row of state.rows) {
+    for (const [modelId, result] of Object.entries(row.results || {})) {
+      const current = stats.get(modelId) || {
+        manualValues: [],
+        judgeValues: [],
+        exactValues: [],
+      };
+      if (result && result.manualScore != null) current.manualValues.push(result.manualScore);
+      if (result && result.judgeScore != null) current.judgeValues.push(result.judgeScore);
+      if (result && result.ruleScore != null) current.exactValues.push(result.ruleScore);
+      stats.set(modelId, current);
+    }
+  }
+
+  const lines = [
+    `评分方式：${getScoreMethodLabel(scoreConfig.scoreMethod)}`,
+    `评分参考：${rowsWithReference}/${state.rows.length} 行已填写`,
+  ];
+
+  if (!stats.size) {
+    lines.push("当前还没有可汇总的评分结果。");
+    return lines.join("\n");
+  }
+
+  const average = (values) => values.length
+    ? (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2)
+    : null;
+
+  for (const [modelId, item] of stats.entries()) {
+    const parts = [];
+    const manualAvg = average(item.manualValues);
+    if (manualAvg != null) {
+      parts.push(`人工 ${manualAvg} (${item.manualValues.length}条)`);
+    }
+    const judgeAvg = average(item.judgeValues);
+    if (judgeAvg != null) {
+      parts.push(`Judge ${judgeAvg} (${item.judgeValues.length}条)`);
+    }
+    if (item.exactValues.length) {
+      const passRate = (item.exactValues.filter((value) => value >= 0.5).length / item.exactValues.length) * 100;
+      parts.push(`精确匹配 ${passRate.toFixed(1)}% (${item.exactValues.length}条)`);
+    }
+    lines.push(`${shortText(modelId, 36)}：${parts.join(" · ") || "暂无评分"}`);
+  }
+
+  return lines.join("\n");
+}
+
+function updateScoreSummary() {
+  if (!el.scoreSummary) return;
+  el.scoreSummary.textContent = buildScoreSummaryText();
+}
+
+function renderScoreControls() {
+  const scoreConfig = getCurrentScoreConfig();
+  const showJudgeConfig = scoreConfig.scoreMethod === SCORE_METHOD_JUDGE;
+  const hasResults = state.rows.some((row) => Object.values(row.results || {}).some((result) => isScorableResult(result)));
+
+  if (el.globalScoreMethod) {
+    el.globalScoreMethod.disabled = state.running || state.judgeRunning;
+  }
+  if (el.judgeConfig) {
+    el.judgeConfig.classList.toggle("hidden", !showJudgeConfig);
+  }
+  if (el.judgeModelInput) {
+    el.judgeModelInput.disabled = state.running || state.judgeRunning || !showJudgeConfig;
+  }
+  if (el.judgePromptInput) {
+    el.judgePromptInput.disabled = state.running || state.judgeRunning || !showJudgeConfig;
+  }
+  if (el.runJudgeBtn) {
+    el.runJudgeBtn.disabled = state.running || state.judgeRunning || !showJudgeConfig || !hasResults;
+    el.runJudgeBtn.title = showJudgeConfig
+      ? (hasResults ? "对当前结果执行或补跑 Judge 评分" : "请先运行实验，再执行 Judge")
+      : "请先将评分方式切换为 LLM Judge";
+  }
+
+  updateScoreSummary();
 }
 
 function normalizeContent(content) {
@@ -269,7 +618,469 @@ function parsePromptTextToRows(text) {
 }
 
 function formatSyncTime(ts) {
+  if (!ts) return "-";
   return new Date(ts).toLocaleString("zh-CN", { hour12: false });
+}
+
+function getExperimentStatusLabel(status) {
+  return ({ draft: "草稿中", active: "已保存", archived: "已归档" })[status] || "草稿中";
+}
+
+function getRunStatusLabel(status) {
+  return ({
+    queued: "排队中",
+    running: "执行中",
+    partial_success: "部分完成",
+    completed: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+  })[status] || "待执行";
+}
+
+function buildExperimentUrl(experimentId = state.currentExperimentId, runId = state.currentRunId) {
+  const url = new URL(location.href);
+  if (experimentId) {
+    url.searchParams.set("experimentId", experimentId);
+  } else {
+    url.searchParams.delete("experimentId");
+  }
+
+  if (runId) {
+    url.searchParams.set("runId", runId);
+  } else {
+    url.searchParams.delete("runId");
+  }
+
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function buildScenarioWorkbenchUrl(options = {}) {
+  const {
+    workspaceId = state.currentWorkspaceId || DEFAULT_WORKSPACE_ID,
+    projectId = state.currentProjectId || DEFAULT_PROJECT_ID,
+    experimentId = state.currentExperimentId,
+    runId = state.currentRunId,
+    reportId = "",
+    sessionId = "",
+  } = options;
+
+  const url = new URL("./zhumengdao/", location.href);
+  url.searchParams.set("workspaceId", workspaceId || DEFAULT_WORKSPACE_ID);
+  url.searchParams.set("projectId", projectId || DEFAULT_PROJECT_ID);
+
+  if (experimentId) {
+    url.searchParams.set("experimentId", experimentId);
+  } else {
+    url.searchParams.delete("experimentId");
+  }
+
+  if (runId) {
+    url.searchParams.set("runId", runId);
+  } else {
+    url.searchParams.delete("runId");
+  }
+
+  if (reportId) {
+    url.searchParams.set("reportId", reportId);
+  } else {
+    url.searchParams.delete("reportId");
+  }
+
+  if (sessionId) {
+    url.searchParams.set("sessionId", sessionId);
+  } else {
+    url.searchParams.delete("sessionId");
+  }
+
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function updateScenarioWorkbenchLink() {
+  const href = buildScenarioWorkbenchUrl();
+  if (el.openScenarioWorkbenchLink) {
+    el.openScenarioWorkbenchLink.href = href;
+  }
+  if (el.openScenarioArchiveLink) {
+    el.openScenarioArchiveLink.href = href;
+  }
+}
+
+function persistPageContext() {
+  const payload = {
+    experimentId: state.currentExperimentId,
+    runId: state.currentRunId,
+  };
+  localStorage.setItem(LS_KEY_PAGE_CONTEXT, JSON.stringify(payload));
+
+  if (location.protocol.startsWith("http")) {
+    window.history.replaceState({}, "", buildExperimentUrl(payload.experimentId, payload.runId));
+  }
+}
+
+function readPersistedPageContext() {
+  const fromUrl = new URLSearchParams(location.search);
+  const experimentId = fromUrl.get("experimentId");
+  const runId = fromUrl.get("runId");
+  if (experimentId || runId) {
+    return { experimentId, runId };
+  }
+
+  try {
+    const raw = localStorage.getItem(LS_KEY_PAGE_CONTEXT);
+    if (!raw) return { experimentId: null, runId: null };
+    const parsed = JSON.parse(raw);
+    return {
+      experimentId: typeof parsed?.experimentId === "string" ? parsed.experimentId : null,
+      runId: typeof parsed?.runId === "string" ? parsed.runId : null,
+    };
+  } catch {
+    return { experimentId: null, runId: null };
+  }
+}
+
+function setCurrentExperimentContext(item = null) {
+  const previousScopeKey = getScenarioSessionsScopeKey();
+
+  state.currentExperimentId = item?.id || null;
+  state.currentExperimentTitle = item?.title || item?.name || "未保存";
+  state.currentExperimentStatus = item?.status || "draft";
+  state.currentEvalType = item ? normalizeEvalType(item.evalType) : EVAL_TYPE_SINGLE_TURN;
+  state.currentSourceType = item ? normalizeSourceType(item.sourceType) : SOURCE_TYPE_MANUAL;
+  state.currentExperimentUpdatedAt = item?.savedAt || item?.updatedAt || null;
+  persistPageContext();
+
+  if (previousScopeKey !== getScenarioSessionsScopeKey()) {
+    state.scenarioSessionsScopeKey = "";
+    void loadScenarioSessions({ silent: true });
+  }
+}
+
+function setCurrentRunContext(item = null) {
+  state.currentRunId = item?.id || null;
+  state.currentRunStatus = item?.status || null;
+  state.currentRunUpdatedAt = item?.updatedAt || item?.startedAt || item?.savedAt || null;
+  state.currentRunCompletedAt = item?.completedAt || null;
+  persistPageContext();
+  renderScenarioSessions();
+}
+
+async function fetchExperimentById(id) {
+  if (!id) return null;
+  const payload = await requestHistoryApi(`${EXPERIMENTS_API_ENDPOINT}?id=${encodeURIComponent(id)}&projectId=${encodeURIComponent(state.currentProjectId)}`, {
+    method: "GET",
+  });
+  return payload?.item ? normalizeHistoryItem(payload.item) : null;
+}
+
+async function fetchLatestRunForExperiment(experimentId) {
+  if (!experimentId) return null;
+  const payload = await requestHistoryApi(`${RUNS_API_ENDPOINT}?projectId=${encodeURIComponent(state.currentProjectId)}&experimentId=${encodeURIComponent(experimentId)}&limit=1`, {
+    method: "GET",
+  });
+  const [item] = Array.isArray(payload?.items) ? payload.items : [];
+  return item || null;
+}
+
+async function fetchRunById(id) {
+  if (!id) return null;
+  const payload = await requestHistoryApi(`${RUNS_API_ENDPOINT}?id=${encodeURIComponent(id)}&projectId=${encodeURIComponent(state.currentProjectId)}`, {
+    method: "GET",
+  });
+  return payload?.item || null;
+}
+
+function hydrateRunIntoWorkbench(run) {
+  if (!run || typeof run !== "object") return;
+
+  state.currentEvalType = normalizeEvalType(run.evalType || state.currentEvalType);
+  state.currentSourceType = normalizeSourceType(run.sourceType || state.currentSourceType);
+  state.selectedModels = Array.isArray(run.config?.models) && run.config.models.length ? [...run.config.models] : [""];
+  state.rows = Array.isArray(run.rows) && run.rows.length
+    ? run.rows.map((row) => createRow(row.prompt || "", {
+      scoreRef: row.scoreRef || "",
+      results: row.results || {},
+    }))
+    : [createRow("")];
+
+  el.systemPromptInput.value = String(run.config?.systemPrompt || "");
+  el.temperatureInput.value = String(clampTemperature(Number(run.config?.temperature)));
+  el.outputTokenRatioInput.value = String(Number.isFinite(Number(run.config?.outputTokenRatio)) ? Number(run.config.outputTokenRatio) : 1);
+  el.providerSelect.value = normalizeProvider(run.config?.provider || el.providerSelect.value);
+  el.baseUrlInput.value = sanitizeBaseUrl(run.config?.baseUrl) || DEFAULT_CUSTOM_BASE_URL;
+  applyScoreConfigToForm({
+    scoreMethod: run.config?.scoreMethod,
+    judgeModel: run.config?.judgeModel || run.config?.judgeModelId,
+    judgePrompt: run.config?.judgePrompt || run.config?.judgePromptTemplate,
+  });
+
+  updateProviderUI();
+  renderExperimentModeControls();
+  renderModelColumns();
+  renderCaseTable();
+  renderScoreControls();
+}
+
+async function hydratePlatformContext() {
+  try {
+    const payload = await requestHistoryApi("/api/bootstrap", { method: "GET" });
+    state.currentWorkspaceId = payload?.workspace?.id || DEFAULT_WORKSPACE_ID;
+    state.currentProjectId = payload?.project?.id || DEFAULT_PROJECT_ID;
+  } catch {
+    state.currentWorkspaceId = DEFAULT_WORKSPACE_ID;
+    state.currentProjectId = DEFAULT_PROJECT_ID;
+  }
+  updateScenarioWorkbenchLink();
+}
+
+async function restorePageContext() {
+  const context = readPersistedPageContext();
+  if (!context.experimentId) {
+    setCurrentExperimentContext(null);
+    setCurrentRunContext(null);
+    renderEntityState();
+    return;
+  }
+
+  let experiment = state.configHistory.find((item) => item.id === context.experimentId) || null;
+  if (!experiment) {
+    try {
+      experiment = await fetchExperimentById(context.experimentId);
+    } catch {
+      experiment = null;
+    }
+  }
+
+  if (!experiment) {
+    setCurrentExperimentContext(null);
+    setCurrentRunContext(null);
+    renderEntityState();
+    return;
+  }
+
+  loadSnapshotIntoForm(experiment, { refreshRun: !context.runId });
+
+  if (context.runId) {
+    try {
+      const run = await fetchRunById(context.runId);
+      if (run) {
+        hydrateRunIntoWorkbench(run);
+      }
+      setCurrentRunContext(run);
+    } catch {
+      await refreshCurrentRunContext();
+    }
+  } else {
+    await refreshCurrentRunContext();
+  }
+
+  renderEntityState();
+}
+
+async function refreshCurrentRunContext() {
+  try {
+    const latestRun = await fetchLatestRunForExperiment(state.currentExperimentId);
+    setCurrentRunContext(latestRun);
+  } catch {
+    setCurrentRunContext(null);
+  }
+  renderEntityState();
+}
+
+function getScenarioSessionsScopeKey() {
+  return `${state.currentProjectId || DEFAULT_PROJECT_ID}::${state.currentExperimentId || "project"}`;
+}
+
+function renderScenarioSessions(options = {}) {
+  if (!el.scenarioSessionsList) return;
+
+  const { loading = false, error = "" } = options;
+  if (el.refreshScenarioSessionsBtn) {
+    el.refreshScenarioSessionsBtn.disabled = state.scenarioSessionsLoading;
+  }
+
+  el.scenarioSessionsList.innerHTML = "";
+
+  if (loading && !state.scenarioSessions.length) {
+    const loadingState = document.createElement("p");
+    loadingState.className = "history-empty";
+    loadingState.textContent = "正在加载场景评测归档...";
+    el.scenarioSessionsList.appendChild(loadingState);
+    return;
+  }
+
+  if (error && !state.scenarioSessions.length) {
+    const errorState = document.createElement("p");
+    errorState.className = "history-empty";
+    errorState.textContent = "场景归档加载失败，请稍后重试。";
+    el.scenarioSessionsList.appendChild(errorState);
+    return;
+  }
+
+  if (!state.scenarioSessions.length) {
+    const emptyState = document.createElement("p");
+    emptyState.className = "history-empty";
+    emptyState.textContent = state.currentExperimentId
+      ? "当前实验下暂无场景评测 session。"
+      : "当前项目下暂无场景评测 session。";
+    el.scenarioSessionsList.appendChild(emptyState);
+    return;
+  }
+
+  for (const session of state.scenarioSessions) {
+    const card = document.createElement("article");
+    card.className = "history-item";
+
+    const main = document.createElement("div");
+    main.className = "history-main";
+
+    const title = document.createElement("strong");
+    title.className = "history-title";
+    title.textContent = session.roleName || `Session ${shortText(session.id || "", 18)}`;
+    title.title = session.id || "";
+
+    const meta = document.createElement("p");
+    meta.className = "history-meta";
+    const modelLabel = [session?.config?.modelA || "-", session?.config?.modelB || "-"].join(" vs ");
+    const metaParts = [
+      formatSyncTime(session.updatedAt || session.createdAt),
+      `${Number(session.turnCount) || 0} 轮`,
+      modelLabel,
+    ];
+    if (session.linkedRunId) {
+      metaParts.push(`Run ${shortText(session.linkedRunId, 16)}`);
+    }
+    if (!state.currentExperimentId && session.experimentId) {
+      metaParts.push(`Experiment ${shortText(session.experimentId, 16)}`);
+    }
+    if (session.linkedRunId && state.currentRunId && session.linkedRunId === state.currentRunId) {
+      metaParts.push("当前 Run");
+    }
+    meta.textContent = metaParts.join(" · ");
+
+    const preview = document.createElement("p");
+    preview.className = "history-meta";
+    const firstUserMessage = Array.isArray(session.messages)
+      ? session.messages.find((item) => item?.role === "user" && item?.type !== "compare" && String(item?.content || "").trim())
+      : null;
+    const previewText = firstUserMessage
+      ? String(firstUserMessage.content || "").replace(/\s+/g, " ").trim()
+      : "";
+    preview.textContent = previewText
+      ? `首条输入：${shortText(previewText, 56)}`
+      : `Session ${shortText(session.id || "", 28)}`;
+
+    main.append(title, meta, preview);
+
+    const actions = document.createElement("div");
+    actions.className = "actions-inline";
+
+    const openLink = document.createElement("a");
+    openLink.className = "small-link action-link";
+    openLink.href = buildScenarioWorkbenchUrl({
+      workspaceId: session.workspaceId || state.currentWorkspaceId,
+      projectId: session.projectId || state.currentProjectId,
+      experimentId: session.experimentId || state.currentExperimentId,
+      runId: session.linkedRunId || state.currentRunId,
+      reportId: session.reportId || "",
+      sessionId: session.id || "",
+    });
+    openLink.textContent = session.linkedRunId && state.currentRunId && session.linkedRunId === state.currentRunId
+      ? "继续评测"
+      : "打开";
+
+    actions.appendChild(openLink);
+    card.append(main, actions);
+    el.scenarioSessionsList.appendChild(card);
+  }
+}
+
+async function loadScenarioSessions(options = {}) {
+  const { silent = false, force = false } = options;
+  if (!el.scenarioSessionsList) return [];
+
+  const scopeKey = getScenarioSessionsScopeKey();
+  if (!force && state.scenarioSessionsScopeKey === scopeKey) {
+    renderScenarioSessions();
+    return state.scenarioSessions;
+  }
+
+  state.scenarioSessionsLoading = true;
+  renderScenarioSessions({ loading: true });
+
+  let errorMessage = "";
+  try {
+    const url = new URL("/api/zhumengdao-sessions", location.origin);
+    url.searchParams.set("projectId", state.currentProjectId || DEFAULT_PROJECT_ID);
+    if (state.currentExperimentId) {
+      url.searchParams.set("experimentId", state.currentExperimentId);
+    }
+    url.searchParams.set("limit", state.currentExperimentId ? "20" : "12");
+
+    const payload = await requestHistoryApi(`${url.pathname}${url.search}`, { method: "GET" });
+    state.scenarioSessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+    state.scenarioSessionsScopeKey = scopeKey;
+
+    if (!silent) {
+      const scopeLabel = state.currentExperimentId ? "当前实验" : "当前项目";
+      setStatus(`已同步${scopeLabel}下的场景归档：${state.scenarioSessions.length} 条`, "ok");
+    }
+  } catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error);
+    state.scenarioSessions = [];
+    state.scenarioSessionsScopeKey = scopeKey;
+
+    if (!silent) {
+      setStatus(`场景归档加载失败：${errorMessage}`, "warn");
+    }
+  } finally {
+    state.scenarioSessionsLoading = false;
+    renderScenarioSessions(errorMessage ? { error: errorMessage } : {});
+  }
+
+  return state.scenarioSessions;
+}
+
+function renderEntityState() {
+  renderExperimentModeControls();
+  updateScenarioWorkbenchLink();
+  if (el.currentExperimentTitle) {
+    el.currentExperimentTitle.textContent = state.currentExperimentTitle || "未保存";
+  }
+  if (el.currentExperimentMeta) {
+    el.currentExperimentMeta.textContent = state.currentExperimentId
+      ? `ID ${shortText(state.currentExperimentId, 24)}`
+      : "新建实验";
+  }
+  if (el.currentExperimentStatus) {
+    el.currentExperimentStatus.textContent = getExperimentStatusLabel(state.currentExperimentStatus);
+  }
+  if (el.currentExperimentUpdatedAt) {
+    el.currentExperimentUpdatedAt.textContent = state.currentExperimentUpdatedAt
+      ? `最近保存 ${formatSyncTime(state.currentExperimentUpdatedAt)}`
+      : "尚未保存";
+  }
+  if (el.currentRunLabel) {
+    el.currentRunLabel.textContent = state.currentRunId ? shortText(state.currentRunId, 24) : "未运行";
+  }
+  if (el.currentRunMeta) {
+    el.currentRunMeta.textContent = state.currentRunId ? "当前实验最近一次运行" : "保存并启动后生成";
+  }
+  if (el.currentRunStatus) {
+    el.currentRunStatus.textContent = getRunStatusLabel(state.currentRunStatus);
+  }
+  if (el.currentRunUpdatedAt) {
+    if (state.currentRunCompletedAt) {
+      el.currentRunUpdatedAt.textContent = `完成于 ${formatSyncTime(state.currentRunCompletedAt)}`;
+    } else if (state.currentRunStatus === "running" && state.currentRunUpdatedAt) {
+      el.currentRunUpdatedAt.textContent = `开始于 ${formatSyncTime(state.currentRunUpdatedAt)}`;
+    } else if (state.currentRunStatus === "queued" && state.currentRunUpdatedAt) {
+      el.currentRunUpdatedAt.textContent = `排队于 ${formatSyncTime(state.currentRunUpdatedAt)}`;
+    } else if (state.currentRunUpdatedAt) {
+      el.currentRunUpdatedAt.textContent = `最近更新 ${formatSyncTime(state.currentRunUpdatedAt)}`;
+    } else {
+      el.currentRunUpdatedAt.textContent = "暂无运行记录";
+    }
+  }
 }
 
 function getSelectedModels() {
@@ -442,24 +1253,33 @@ function parseOfficialModels(payload) {
 function normalizeHistoryItem(item) {
   if (!item || typeof item !== "object") return null;
 
-  const provider = normalizeProvider(item.provider);
-  const rawBaseUrl = sanitizeBaseUrl(item.baseUrl);
+  const rawConfig = item.config && typeof item.config === "object" ? item.config : {};
+  const provider = normalizeProvider(rawConfig.provider || item.provider);
+  const rawBaseUrl = sanitizeBaseUrl(rawConfig.baseUrl || item.baseUrl);
 
-  const selectedModels = Array.isArray(item.selectedModels)
-    ? item.selectedModels.map((m) => String(m || "").trim()).filter(Boolean)
+  const selectedModelsSource = Array.isArray(item.selectedModels) ? item.selectedModels : rawConfig.selectedModels;
+  const selectedModels = Array.isArray(selectedModelsSource)
+    ? selectedModelsSource.map((m) => String(m || "").trim()).filter(Boolean)
     : [];
 
-  const rows = Array.isArray(item.rows)
-    ? item.rows.map((r) => ({ prompt: String(r?.prompt ?? "") }))
+  const rowsSource = Array.isArray(item.rows) ? item.rows : rawConfig.rows;
+  const rows = Array.isArray(rowsSource)
+    ? rowsSource.map((r) => ({
+      prompt: String(r?.prompt ?? ""),
+      scoreRef: String(r?.scoreRef ?? ""),
+    }))
     : [];
 
   return {
     id: typeof item.id === "string" && item.id ? item.id : createSnapshotId(),
-    title: String(item.title || "未命名配置"),
-    savedAt: Number(item.savedAt) || Date.now(),
-    temperature: clampTemperature(Number(item.temperature)),
+    title: String(item.title || item.name || "未命名配置"),
+    status: String(item.status || "draft"),
+    evalType: normalizeEvalType(item.evalType || rawConfig.evalType),
+    sourceType: normalizeSourceType(item.sourceType || rawConfig.sourceType),
+    savedAt: Number(item.savedAt || item.updatedAt) || Date.now(),
+    temperature: clampTemperature(Number(rawConfig.temperature ?? item.temperature)),
     outputTokenRatio: (() => {
-      const value = Number(item.outputTokenRatio);
+      const value = Number(rawConfig.outputTokenRatio ?? item.outputTokenRatio);
       if (Number.isNaN(value)) return 1;
       if (value < 0.1) return 0.1;
       if (value > 4) return 4;
@@ -467,7 +1287,10 @@ function normalizeHistoryItem(item) {
     })(),
     provider,
     baseUrl: provider === PROVIDER_CUSTOM ? rawBaseUrl || DEFAULT_CUSTOM_BASE_URL : "",
-    systemPrompt: String(item.systemPrompt || ""),
+    systemPrompt: String(rawConfig.systemPrompt || item.systemPrompt || ""),
+    scoreMethod: normalizeScoreMethod(rawConfig.scoreMethod || item.scoreMethod),
+    judgeModel: String(rawConfig.judgeModel || rawConfig.judgeModelId || item.judgeModel || item.judgeModelId || "").trim() || DEFAULT_JUDGE_MODEL,
+    judgePrompt: String(rawConfig.judgePrompt || rawConfig.judgePromptTemplate || item.judgePrompt || item.judgePromptTemplate || "").trim() || DEFAULT_JUDGE_PROMPT,
     selectedModels,
     rows,
   };
@@ -545,24 +1368,107 @@ async function requestHistoryApi(url, options) {
   return payload ?? {};
 }
 
-async function fetchRemoteHistory(namespace) {
-  const payload = await requestHistoryApi(`${HISTORY_API_ENDPOINT}?workspace=${encodeURIComponent(namespace)}`, {
+async function fetchRemoteHistory() {
+  const payload = await requestHistoryApi(`${EXPERIMENTS_API_ENDPOINT}?projectId=${encodeURIComponent(state.currentProjectId)}&limit=${MAX_CONFIG_HISTORY}`, {
     method: "GET",
   });
   const items = Array.isArray(payload?.items) ? payload.items : [];
   return items.map(normalizeHistoryItem).filter(Boolean).slice(0, MAX_CONFIG_HISTORY);
 }
 
-async function pushRemoteHistory(namespace, items) {
-  const payload = await requestHistoryApi(`${HISTORY_API_ENDPOINT}?workspace=${encodeURIComponent(namespace)}`, {
-    method: "PUT",
+async function saveRemoteHistoryItem(snapshot) {
+  const hasExisting = !!state.currentExperimentId;
+  const endpoint = hasExisting
+    ? `${EXPERIMENTS_API_ENDPOINT}?id=${encodeURIComponent(state.currentExperimentId)}&projectId=${encodeURIComponent(state.currentProjectId)}`
+    : `${EXPERIMENTS_API_ENDPOINT}?projectId=${encodeURIComponent(state.currentProjectId)}`;
+
+  const payload = await requestHistoryApi(endpoint, {
+    method: hasExisting ? "PATCH" : "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ items }),
+    body: JSON.stringify({
+      item: {
+        id: hasExisting ? state.currentExperimentId : snapshot.id,
+        title: snapshot.title,
+        name: snapshot.title,
+        status: state.currentExperimentStatus === "archived" ? "archived" : "active",
+        evalType: snapshot.evalType,
+        sourceType: snapshot.sourceType,
+        savedAt: snapshot.savedAt,
+        provider: snapshot.provider,
+        baseUrl: snapshot.baseUrl,
+        temperature: snapshot.temperature,
+        outputTokenRatio: snapshot.outputTokenRatio,
+        systemPrompt: snapshot.systemPrompt,
+        scoreMethod: snapshot.scoreMethod,
+        judgeModel: snapshot.judgeModel,
+        judgePrompt: snapshot.judgePrompt,
+        selectedModels: snapshot.selectedModels,
+        rows: snapshot.rows,
+        config: {
+          provider: snapshot.provider,
+          baseUrl: snapshot.baseUrl,
+          temperature: snapshot.temperature,
+          outputTokenRatio: snapshot.outputTokenRatio,
+          systemPrompt: snapshot.systemPrompt,
+          scoreMethod: snapshot.scoreMethod,
+          judgeModel: snapshot.judgeModel,
+          judgePrompt: snapshot.judgePrompt,
+          selectedModels: snapshot.selectedModels,
+          rows: snapshot.rows,
+        },
+      },
+    }),
   });
-  const saved = Array.isArray(payload?.items) ? payload.items : [];
-  return saved.map(normalizeHistoryItem).filter(Boolean).slice(0, MAX_CONFIG_HISTORY);
+
+  return normalizeHistoryItem(payload?.item);
+}
+
+async function deleteRemoteHistoryItem(id) {
+  await requestHistoryApi(`${EXPERIMENTS_API_ENDPOINT}?id=${encodeURIComponent(id)}&projectId=${encodeURIComponent(state.currentProjectId)}`, {
+    method: "DELETE",
+  });
+}
+
+function upsertConfigHistoryItem(item) {
+  if (!item) return null;
+  const normalized = normalizeHistoryItem(item);
+  if (!normalized) return null;
+  state.configHistory = [normalized, ...state.configHistory.filter((cfg) => cfg.id !== normalized.id)]
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
+    .slice(0, MAX_CONFIG_HISTORY);
+  writeLocalHistoryBackup(getHistoryNamespace(), state.configHistory);
+  return normalized;
+}
+
+function loadSnapshotIntoForm(item, options = {}) {
+  const { refreshRun = true } = options;
+  setCurrentExperimentContext(item);
+  setCurrentRunContext(null);
+  state.selectedModels = item.selectedModels.length ? [...item.selectedModels] : [""];
+  state.rows = item.rows.length
+    ? item.rows.map((row) => createRow(row.prompt, { scoreRef: row.scoreRef || "" }))
+    : [createRow("")];
+  el.systemPromptInput.value = item.systemPrompt;
+  el.temperatureInput.value = String(clampTemperature(Number(item.temperature)));
+  el.outputTokenRatioInput.value = String(item.outputTokenRatio ?? 1);
+  el.providerSelect.value = normalizeProvider(item.provider);
+  el.baseUrlInput.value = sanitizeBaseUrl(item.baseUrl) || DEFAULT_CUSTOM_BASE_URL;
+  applyScoreConfigToForm(item);
+  saveProviderPreference();
+  saveBaseUrlPreference();
+  updateProviderUI();
+  renderScoreControls();
+  if (isUsingOpenRouter()) {
+    void loadOfficialModels(false);
+  }
+  clearResults(true);
+  renderModelColumns();
+  renderCaseTable();
+  if (refreshRun) {
+    void refreshCurrentRunContext();
+  }
 }
 
 async function loadConfigHistoryFromServer(options = {}) {
@@ -570,56 +1476,20 @@ async function loadConfigHistoryFromServer(options = {}) {
   const namespace = getHistoryNamespace();
 
   try {
-    const remoteItems = await fetchRemoteHistory(namespace);
+    const remoteItems = await fetchRemoteHistory();
     state.configHistory = remoteItems;
     writeLocalHistoryBackup(namespace, state.configHistory);
     renderHistoryList();
     if (!silent) {
-      setStatus(`已加载服务端历史：${state.configHistory.length} 条`, "ok");
+      setStatus(`已加载实验草稿：${state.configHistory.length} 条`, "ok");
     }
   } catch (error) {
     state.configHistory = readLocalHistoryBackup(namespace);
     renderHistoryList();
     if (!silent) {
-      const isStorageOptional = error instanceof ApiError && error.code === "KV_NOT_CONFIGURED";
-      if (isStorageOptional) {
-        setStatus("当前未配置服务端持久化，已使用浏览器本地历史", "warn");
-      } else {
-        setStatus(`服务端历史加载失败，使用本地兜底：${error instanceof Error ? error.message : String(error)}`, "warn");
-      }
+      setStatus(`实验草稿加载失败，使用本地兜底：${error instanceof Error ? error.message : String(error)}`, "warn");
     }
   }
-}
-
-async function persistConfigHistory(options = {}) {
-  const { silent = true } = options;
-  const namespace = getHistoryNamespace();
-  state.configHistory = state.configHistory.slice(0, MAX_CONFIG_HISTORY);
-  writeLocalHistoryBackup(namespace, state.configHistory);
-
-  try {
-    const saved = await pushRemoteHistory(namespace, state.configHistory);
-    state.configHistory = saved;
-    writeLocalHistoryBackup(namespace, state.configHistory);
-    renderHistoryList();
-    if (!silent) {
-      setStatus("历史配置已同步到服务端", "ok");
-    }
-  } catch (error) {
-    if (!silent) {
-      const isStorageOptional = error instanceof ApiError && error.code === "KV_NOT_CONFIGURED";
-      if (isStorageOptional) {
-        setStatus("当前未配置服务端持久化，配置已保存到浏览器本地", "warn");
-      } else {
-        setStatus(`历史同步失败：${error instanceof Error ? error.message : String(error)}`, "warn");
-      }
-    }
-  }
-}
-
-function queueHistorySync(silent = true) {
-  historySyncQueue = historySyncQueue.then(() => persistConfigHistory({ silent }));
-  return historySyncQueue;
 }
 
 function buildConfigTitle(rows) {
@@ -632,17 +1502,27 @@ function buildConfigTitle(rows) {
 }
 
 function buildConfigSnapshot() {
-  const rows = state.rows.map((row) => ({ prompt: row.prompt }));
+  const rows = state.rows.map((row) => ({
+    prompt: row.prompt,
+    scoreRef: row.scoreRef || "",
+  }));
   const provider = normalizeProvider(el.providerSelect.value);
+  const scoreConfig = getCurrentScoreConfig();
   return {
-    id: createSnapshotId(),
+    id: state.currentExperimentId || createSnapshotId(),
     title: buildConfigTitle(rows),
+    status: state.currentExperimentStatus === "archived" ? "archived" : "active",
+    evalType: normalizeEvalType(state.currentEvalType),
+    sourceType: normalizeSourceType(state.currentSourceType),
     savedAt: Date.now(),
     temperature: parseTemperature(),
     outputTokenRatio: parseOutputTokenRatio(),
     provider,
     baseUrl: provider === PROVIDER_CUSTOM ? sanitizeBaseUrl(el.baseUrlInput.value) : "",
     systemPrompt: el.systemPromptInput.value,
+    scoreMethod: scoreConfig.scoreMethod,
+    judgeModel: scoreConfig.judgeModel,
+    judgePrompt: scoreConfig.judgePrompt,
     selectedModels: [...state.selectedModels],
     rows,
   };
@@ -650,13 +1530,19 @@ function buildConfigSnapshot() {
 
 function configSignature(snapshot) {
   return JSON.stringify({
+    status: snapshot.status,
+    evalType: snapshot.evalType,
+    sourceType: snapshot.sourceType,
     temperature: snapshot.temperature,
     outputTokenRatio: snapshot.outputTokenRatio,
     provider: snapshot.provider,
     baseUrl: snapshot.baseUrl,
     systemPrompt: snapshot.systemPrompt,
+    scoreMethod: snapshot.scoreMethod,
+    judgeModel: snapshot.judgeModel,
+    judgePrompt: snapshot.judgePrompt,
     selectedModels: snapshot.selectedModels,
-    rows: snapshot.rows.map((r) => r.prompt),
+    rows: snapshot.rows.map((r) => ({ prompt: r.prompt, scoreRef: r.scoreRef || "" })),
   });
 }
 
@@ -682,38 +1568,36 @@ function renderHistoryList() {
     const rowCount = item.rows.length;
     const hasSystemPrompt = item.systemPrompt.trim() ? " · 含 System Prompt" : "";
     const providerText = item.provider === PROVIDER_CUSTOM ? "自定义接口" : "OpenRouter";
+    const evalTypeText = getEvalTypeLabel(item.evalType);
+    const sourceTypeText = getSourceTypeLabel(item.sourceType);
+    const statusText = getExperimentStatusLabel(item.status);
+    const scoreMethodText = getScoreMethodLabel(item.scoreMethod);
 
     card.querySelector(".history-meta").textContent =
-      `${formatSyncTime(item.savedAt)} · ${providerText} · 模型列 ${modelCount} · 环节 ${rowCount} · T=${item.temperature} · 输出系数 ${item.outputTokenRatio}${hasSystemPrompt}`;
+      `${formatSyncTime(item.savedAt)} · ${statusText} · ${evalTypeText} · ${sourceTypeText} · ${providerText} · 评分 ${scoreMethodText} · 模型列 ${modelCount} · 环节 ${rowCount} · T=${item.temperature} · 输出系数 ${item.outputTokenRatio}${hasSystemPrompt}`;
 
     const loadBtn = card.querySelector(".load-history-btn");
     loadBtn.disabled = state.running;
     loadBtn.addEventListener("click", () => {
-      state.selectedModels = item.selectedModels.length ? [...item.selectedModels] : [""];
-      state.rows = item.rows.length ? item.rows.map((row) => createRow(row.prompt)) : [createRow("")];
-      el.systemPromptInput.value = item.systemPrompt;
-      el.temperatureInput.value = String(clampTemperature(Number(item.temperature)));
-      el.outputTokenRatioInput.value = String(item.outputTokenRatio ?? 1);
-      el.providerSelect.value = normalizeProvider(item.provider);
-      el.baseUrlInput.value = sanitizeBaseUrl(item.baseUrl) || DEFAULT_CUSTOM_BASE_URL;
-      saveProviderPreference();
-      saveBaseUrlPreference();
-      updateProviderUI();
-      if (isUsingOpenRouter()) {
-        void loadOfficialModels(false);
-      }
-      clearResults(true);
-      renderModelColumns();
-      renderCaseTable();
+      loadSnapshotIntoForm(item);
       setStatus(`已载入历史配置：${item.title}`, "ok");
     });
 
     const deleteBtn = card.querySelector(".delete-history-btn");
     deleteBtn.disabled = state.running;
-    deleteBtn.addEventListener("click", () => {
+    deleteBtn.addEventListener("click", async () => {
+      try {
+        await deleteRemoteHistoryItem(item.id);
+      } catch {
+        // Keep local removal even if remote delete fails.
+      }
       state.configHistory = state.configHistory.filter((cfg) => cfg.id !== item.id);
+      if (state.currentExperimentId === item.id) {
+        setCurrentExperimentContext(null);
+        setCurrentRunContext(null);
+      }
+      writeLocalHistoryBackup(getHistoryNamespace(), state.configHistory);
       renderHistoryList();
-      void queueHistorySync(false);
     });
 
     el.historyList.appendChild(card);
@@ -722,7 +1606,7 @@ function renderHistoryList() {
   updateWorkbenchSummary();
 }
 
-function saveCurrentConfig(options = {}) {
+async function saveCurrentConfig(options = {}) {
   const { silent = false, source = "manual" } = options;
   const snapshot = buildConfigSnapshot();
 
@@ -733,29 +1617,56 @@ function saveCurrentConfig(options = {}) {
     if (!silent) {
       setStatus("当前配置为空，未保存", "warn");
     }
-    return;
+    return null;
   }
 
-  const latest = state.configHistory[0];
-  if (latest && source === "auto" && configSignature(latest) === configSignature(snapshot)) {
-    return;
+  const current = state.configHistory.find((cfg) => cfg.id === state.currentExperimentId) || state.configHistory[0];
+  if (current && source === "auto" && configSignature(current) === configSignature(snapshot)) {
+    return current;
   }
 
-  state.configHistory.unshift(snapshot);
-  state.configHistory = state.configHistory.slice(0, MAX_CONFIG_HISTORY);
-  renderHistoryList();
-
-  if (!silent) {
-    setStatus("当前配置已保存，正在同步服务端...", "ok");
+  try {
+    const previousExperimentId = state.currentExperimentId;
+    const saved = saveRemoteHistoryItem(snapshot);
+    const resolved = upsertConfigHistoryItem(await saved);
+    setCurrentExperimentContext(resolved || snapshot);
+    if (previousExperimentId !== state.currentExperimentId) {
+      setCurrentRunContext(null);
+    }
+    renderHistoryList();
+    if (!silent) {
+      setStatus("实验草稿已保存", "ok");
+    }
+    return resolved;
+  } catch (error) {
+    const previousExperimentId = state.currentExperimentId;
+    const fallback = upsertConfigHistoryItem(snapshot);
+    setCurrentExperimentContext(fallback || snapshot);
+    if (previousExperimentId !== state.currentExperimentId) {
+      setCurrentRunContext(null);
+    }
+    renderHistoryList();
+    if (!silent) {
+      setStatus(`服务端保存失败，已保存在本地：${error instanceof Error ? error.message : String(error)}`, "warn");
+    }
+    return fallback;
   }
-
-  void queueHistorySync(source !== "manual");
 }
 
-function clearConfigHistory() {
+async function clearConfigHistory() {
   state.configHistory = [];
+  setCurrentExperimentContext(null);
+  setCurrentRunContext(null);
+  writeLocalHistoryBackup(getHistoryNamespace(), state.configHistory);
   renderHistoryList();
-  void queueHistorySync(false);
+  try {
+    await requestHistoryApi(`${HISTORY_API_ENDPOINT}?projectId=${encodeURIComponent(state.currentProjectId)}`, {
+      method: "DELETE",
+    });
+    setStatus("已清空实验草稿", "ok");
+  } catch (error) {
+    setStatus(`已清空本地草稿，服务端清空失败：${error instanceof Error ? error.message : String(error)}`, "warn");
+  }
 }
 
 function applyAvailableModels(models, syncedAt) {
@@ -881,18 +1792,21 @@ function estimateRunCostByModel(modelId, prompts, systemPromptTokens, outputRati
     return null;
   }
 
+  const isMultiTurn = state.currentEvalType === EVAL_TYPE_MULTI_TURN;
   let historyTokens = systemPromptTokens;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
   for (const promptText of prompts) {
     const promptTokens = estimateTextTokens(promptText);
-    const roundInputTokens = historyTokens + promptTokens;
+    const roundInputTokens = (isMultiTurn ? historyTokens : systemPromptTokens) + promptTokens;
     const roundOutputTokens = Math.max(24, Math.ceil(promptTokens * outputRatio));
 
     totalInputTokens += roundInputTokens;
     totalOutputTokens += roundOutputTokens;
-    historyTokens += promptTokens + roundOutputTokens;
+    if (isMultiTurn) {
+      historyTokens += promptTokens + roundOutputTokens;
+    }
   }
 
   const inputCost = totalInputTokens * inputPrice;
@@ -912,6 +1826,11 @@ function estimateRunCostByModel(modelId, prompts, systemPromptTokens, outputRati
 
 function renderCostEstimate() {
   const outputRatio = parseOutputTokenRatio();
+
+  if (isScenarioMode()) {
+    el.costSummary.textContent = "场景模拟请在“场景评测”工作台执行；当前页主要保留统一对象归档与跳转入口。";
+    return;
+  }
 
   if (!isUsingOpenRouter()) {
     el.costSummary.textContent = "预估总花费：自定义接口模式暂不自动估算（缺少统一定价来源）";
@@ -963,7 +1882,7 @@ function renderModelColumns() {
     title.textContent = `模型列 ${index + 1}`;
 
     const removeBtn = card.querySelector(".remove-col-btn");
-    removeBtn.disabled = state.running || state.selectedModels.length <= 1;
+    removeBtn.disabled = (state.running || state.judgeRunning) || state.selectedModels.length <= 1;
     removeBtn.addEventListener("click", () => {
       if (state.selectedModels.length <= 1) {
         setStatus("至少保留一个模型列", "warn");
@@ -978,7 +1897,7 @@ function renderModelColumns() {
 
     const select = card.querySelector(".model-select");
     if (usingOpenRouter) {
-      select.disabled = state.running;
+      select.disabled = state.running || state.judgeRunning;
 
       const placeholder = document.createElement("option");
       placeholder.value = "";
@@ -1015,7 +1934,7 @@ function renderModelColumns() {
       input.className = "model-input";
       input.placeholder = "手动输入模型 ID，例如 gpt-4o-mini";
       input.value = selectedModel;
-      input.disabled = state.running;
+      input.disabled = state.running || state.judgeRunning;
       input.addEventListener("blur", () => {
         const normalized = input.value.trim();
         input.value = normalized;
@@ -1053,6 +1972,7 @@ function renderModelColumns() {
 
   renderCostEstimate();
   updateWorkbenchSummary();
+  renderScoreControls();
 }
 
 function ensureModelColumns() {
@@ -1102,21 +2022,21 @@ function renderCaseTableBody() {
 
     const roundTag = document.createElement("div");
     roundTag.className = "round-tag";
-    roundTag.textContent = `环节 ${index + 1}`;
+    roundTag.textContent = `${getRowUnitLabel()} ${index + 1}`;
 
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "small-btn";
     removeBtn.textContent = "删除";
-    removeBtn.disabled = state.running || state.rows.length <= 1;
+    removeBtn.disabled = (state.running || state.judgeRunning) || state.rows.length <= 1;
     removeBtn.addEventListener("click", () => {
       if (state.rows.length <= 1) {
-        setStatus("至少保留一个环节", "warn");
+        setStatus("至少保留 1 行输入", "warn");
         return;
       }
       state.rows = state.rows.filter((item) => item.id !== row.id);
       renderCaseTable();
-      setStatus("环节已删除", "warn");
+      setStatus("当前行已删除", "warn");
     });
 
     roundCell.appendChild(roundTag);
@@ -1128,15 +2048,40 @@ function renderCaseTableBody() {
 
     const promptInput = document.createElement("textarea");
     promptInput.rows = 3;
-    promptInput.placeholder = `输入第 ${index + 1} 个环节 Prompt`;
+    promptInput.placeholder = getPromptPlaceholder(index);
     promptInput.value = row.prompt;
-    promptInput.disabled = state.running;
+    promptInput.disabled = state.running || state.judgeRunning;
     promptInput.addEventListener("input", () => {
       row.prompt = promptInput.value;
       renderCostEstimate();
     });
 
     promptCell.appendChild(promptInput);
+
+    const scoreRefInput = document.createElement("textarea");
+    scoreRefInput.rows = 2;
+    scoreRefInput.className = "score-ref-input";
+    scoreRefInput.placeholder = "参考答案 / 评分参考（用于精确匹配或 Judge）";
+    scoreRefInput.value = row.scoreRef || "";
+    scoreRefInput.disabled = state.running || state.judgeRunning;
+    scoreRefInput.addEventListener("input", () => {
+      row.scoreRef = scoreRefInput.value;
+      updateScoreSummary();
+    });
+    scoreRefInput.addEventListener("blur", () => {
+      row.scoreRef = scoreRefInput.value;
+      if (getCurrentScoreConfig().scoreMethod === SCORE_METHOD_EXACT) {
+        applyExactScoresForRows([row]);
+        renderCaseTableBody();
+        void queuePersistCurrentRunSnapshot({ silent: true });
+      } else {
+        updateScoreSummary();
+      }
+      if (state.currentExperimentId) {
+        void saveCurrentConfig({ silent: true, source: "auto" });
+      }
+    });
+    promptCell.appendChild(scoreRefInput);
     tr.appendChild(promptCell);
 
     for (const modelId of state.selectedModels) {
@@ -1151,9 +2096,21 @@ function renderCaseTableBody() {
 
   renderCostEstimate();
   updateWorkbenchSummary();
+  renderScoreControls();
+}
+
+function createScoreBadge(label, className, title = "") {
+  const badge = document.createElement("span");
+  badge.className = `score-badge ${className}`;
+  badge.textContent = label;
+  if (title) {
+    badge.title = title;
+  }
+  return badge;
 }
 
 function fillResponseCell(cell, row, modelId) {
+  cell.innerHTML = "";
   if (!modelId) {
     const p = document.createElement("p");
     p.className = "result-empty";
@@ -1182,9 +2139,10 @@ function fillResponseCell(cell, row, modelId) {
     meta.classList.add("err");
   }
 
+  const latencyText = result.latencyMs == null ? "-" : `${result.latencyMs}`;
   const tokenText = result.usage?.total_tokens ? ` · tokens: ${result.usage.total_tokens}` : "";
   const statusText = result.skipped ? "跳过" : result.ok ? "成功" : "失败";
-  meta.textContent = `${statusText} · ${result.latencyMs}ms${tokenText}`;
+  meta.textContent = `${statusText} · ${latencyText}ms${tokenText}`;
 
   const content = document.createElement("pre");
   content.className = "result-content";
@@ -1192,10 +2150,68 @@ function fillResponseCell(cell, row, modelId) {
 
   cell.appendChild(meta);
   cell.appendChild(content);
+
+  const scoreRow = document.createElement("div");
+  scoreRow.className = "score-row";
+
+  if (result.ruleScore != null) {
+    scoreRow.appendChild(createScoreBadge(
+      result.ruleScore >= 0.5 ? "精确匹配通过" : "精确匹配未命中",
+      result.ruleScore >= 0.5 ? "score-pass" : "score-fail",
+    ));
+  }
+
+  if (result.judgeScore != null) {
+    const reason = String(result.judgeDetail?.reason || "").trim();
+    scoreRow.appendChild(createScoreBadge(
+      `Judge ${Number(result.judgeScore).toFixed(2)}/5`,
+      "score-judge",
+      reason,
+    ));
+  } else if (result.judgeDetail?.reason) {
+    scoreRow.appendChild(createScoreBadge("Judge 失败", "score-fail", result.judgeDetail.reason));
+  }
+
+  if (!result.skipped) {
+    const manualWrap = document.createElement("div");
+    manualWrap.className = "manual-score-wrap";
+
+    for (let value = 1; value <= MAX_MANUAL_SCORE; value += 1) {
+      const starBtn = document.createElement("button");
+      starBtn.type = "button";
+      starBtn.className = "score-star";
+      if (result.manualScore != null && Number(result.manualScore) >= value) {
+        starBtn.classList.add("active");
+      }
+      starBtn.textContent = "★";
+      starBtn.disabled = state.running || state.judgeRunning;
+      starBtn.title = `人工打 ${value} 星`;
+      starBtn.addEventListener("click", () => {
+        result.manualScore = result.manualScore === value ? null : value;
+        fillResponseCell(cell, row, modelId);
+        updateScoreSummary();
+        void queuePersistCurrentRunSnapshot({ silent: true });
+      });
+      manualWrap.appendChild(starBtn);
+    }
+
+    const label = document.createElement("span");
+    label.className = "manual-score-label";
+    label.textContent = result.manualScore != null ? `人工 ${result.manualScore}/5` : "人工评分";
+    manualWrap.appendChild(label);
+    scoreRow.appendChild(manualWrap);
+  }
+
+  if (scoreRow.childNodes.length) {
+    cell.appendChild(scoreRow);
+  }
 }
 
 function setBusy(running) {
   state.running = running;
+  if (running) {
+    state.currentRunStatus = "running";
+  }
   el.runWorkflowBtn.disabled = running;
   el.clearResultsBtn.disabled = running;
   el.exportBtn.disabled = running;
@@ -1291,8 +2307,383 @@ async function requestByModel({ apiKey, modelId, prompt, history, temperature, p
   }
 }
 
+function buildJudgePrompt(template, values = {}) {
+  return String(template || DEFAULT_JUDGE_PROMPT)
+    .replace(/{{\s*prompt\s*}}/gi, values.prompt || "")
+    .replace(/{{\s*response\s*}}/gi, values.response || "")
+    .replace(/{{\s*reference\s*}}/gi, values.reference || "");
+}
+
+function extractFirstJsonObject(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) return null;
+
+  const fencedMatch = normalized.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fencedMatch ? fencedMatch[1].trim() : normalized;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    // Fall through to best-effort object extraction.
+  }
+
+  const firstBrace = candidate.indexOf("{");
+  const lastBrace = candidate.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const objectText = candidate.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(objectText);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function parseJudgePayload(content) {
+  const parsed = extractFirstJsonObject(content);
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Judge 未返回可解析 JSON");
+  }
+
+  const accuracy = clampScore(parsed.accuracy);
+  const completeness = clampScore(parsed.completeness);
+  const fluency = clampScore(parsed.fluency);
+  let score = clampScore(parsed.score ?? parsed.overallScore ?? parsed.totalScore);
+
+  if (score == null) {
+    const dimensionValues = [accuracy, completeness, fluency].filter((value) => value != null);
+    if (dimensionValues.length) {
+      score = clampScore(dimensionValues.reduce((sum, value) => sum + value, 0) / dimensionValues.length);
+    }
+  }
+
+  if (score == null) {
+    throw new Error("Judge JSON 缺少 score 字段");
+  }
+
+  return {
+    score,
+    detail: {
+      accuracy,
+      completeness,
+      fluency,
+      reason: String(parsed.reason || parsed.comment || parsed.explanation || "").trim().slice(0, 500),
+    },
+  };
+}
+
+async function requestJudgeScore({ apiKey, provider, endpoint, judgeModel, judgePrompt, prompt, response, reference }) {
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+
+  if (provider === PROVIDER_OPENROUTER) {
+    headers["X-Title"] = "OpenRouter Judge Runner";
+  }
+
+  if (provider === PROVIDER_OPENROUTER && location.protocol.startsWith("http")) {
+    headers["HTTP-Referer"] = location.origin;
+  }
+
+  const compiledPrompt = buildJudgePrompt(judgePrompt, {
+    prompt,
+    response,
+    reference,
+  });
+
+  const responseObj = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: judgeModel,
+      messages: [{ role: "user", content: compiledPrompt }],
+      temperature: 0,
+      stream: false,
+    }),
+  });
+
+  const payload = await responseObj.json().catch(() => ({}));
+  if (!responseObj.ok) {
+    throw new Error(payload?.error?.message || `HTTP ${responseObj.status}`);
+  }
+
+  return parseJudgePayload(normalizeContent(payload?.choices?.[0]?.message?.content));
+}
+
+async function scoreRowsWithJudge(rows, options = {}) {
+  const { apiKey, provider, endpoint, judgeModel, judgePrompt, silent = false } = options;
+  const targets = [];
+
+  rows.forEach((row, rowIndex) => {
+    for (const [modelId, result] of Object.entries(row.results || {})) {
+      if (!isScorableResult(result)) continue;
+      targets.push({ row, rowIndex, modelId, result });
+    }
+  });
+
+  if (!targets.length) {
+    if (!silent) {
+      setStatus("当前没有可供 Judge 评分的结果", "warn");
+    }
+    return { success: 0, total: 0 };
+  }
+
+  let success = 0;
+  state.judgeRunning = true;
+  renderScoreControls();
+
+  try {
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index];
+      setStatus(`Judge 评分中：${index + 1}/${targets.length} · ${shortText(target.modelId, 28)}`, "warn");
+      try {
+        const judged = await requestJudgeScore({
+          apiKey,
+          provider,
+          endpoint,
+          judgeModel,
+          judgePrompt,
+          prompt: target.row.prompt || "",
+          response: target.result.content || "",
+          reference: target.row.scoreRef || "",
+        });
+        target.result.judgeScore = judged.score;
+        target.result.judgeDetail = judged.detail;
+        success += 1;
+      } catch (error) {
+        target.result.judgeScore = null;
+        target.result.judgeDetail = {
+          accuracy: null,
+          completeness: null,
+          fluency: null,
+          reason: `Judge 失败：${error instanceof Error ? error.message : String(error)}`.slice(0, 500),
+        };
+      }
+      renderCaseTableBody();
+    }
+  } finally {
+    state.judgeRunning = false;
+    renderScoreControls();
+  }
+
+  return { success, total: targets.length };
+}
+
+async function runJudgeForCurrentResults(options = {}) {
+  const { silent = false, persist = true } = options;
+  if (state.running || state.judgeRunning) return { success: 0, total: 0 };
+
+  const scoreConfig = getCurrentScoreConfig();
+  if (scoreConfig.scoreMethod !== SCORE_METHOD_JUDGE) {
+    if (!silent) {
+      setStatus("请先将评分方式切换为 LLM Judge", "warn");
+    }
+    return { success: 0, total: 0 };
+  }
+
+  const apiKey = el.apiKeyInput.value.trim();
+  if (!apiKey) {
+    if (!silent) {
+      setStatus("运行 Judge 前请先填写 API Key", "err");
+    }
+    return { success: 0, total: 0 };
+  }
+
+  const endpoint = getChatEndpoint();
+  if (!endpoint) {
+    if (!silent) {
+      setStatus("运行 Judge 前请先填写 Base URL", "err");
+    }
+    return { success: 0, total: 0 };
+  }
+
+  if (!scoreConfig.judgeModel) {
+    if (!silent) {
+      setStatus("请先填写 Judge 模型 ID", "err");
+    }
+    return { success: 0, total: 0 };
+  }
+
+  const result = await scoreRowsWithJudge(state.rows, {
+    apiKey,
+    provider: normalizeProvider(el.providerSelect.value),
+    endpoint,
+    judgeModel: scoreConfig.judgeModel,
+    judgePrompt: scoreConfig.judgePrompt,
+    silent,
+  });
+
+  if (persist) {
+    await queuePersistCurrentRunSnapshot({ silent: true });
+  }
+
+  if (!silent) {
+    const statusType = result.success === result.total ? "ok" : (result.success > 0 ? "warn" : "err");
+    setStatus(`Judge 完成：成功 ${result.success}/${result.total}`, statusType);
+  }
+
+  renderCaseTableBody();
+  return result;
+}
+
+function getRunCompletionStatus(successCalls, totalCalls) {
+  if (totalCalls <= 0 || successCalls <= 0) return "failed";
+  if (successCalls === totalCalls) return "completed";
+  return "partial_success";
+}
+
+function serializeRunRows() {
+  return state.rows.map((row) => ({
+    prompt: row.prompt,
+    scoreRef: row.scoreRef || "",
+    results: row.results,
+  }));
+}
+
+async function persistRunRecord(options) {
+  const {
+    id,
+    experimentId,
+    provider,
+    endpoint,
+    selectedModels,
+    systemPrompt,
+    temperature,
+    outputTokenRatio,
+    status,
+    startedAt = null,
+    completedAt = null,
+    rows = serializeRunRows(),
+    successCalls,
+    totalCalls,
+  } = options;
+
+  const hasExisting = !!id;
+  const scoreConfig = getCurrentScoreConfig();
+
+  const payload = {
+    item: {
+      ...(hasExisting ? { id } : {}),
+      workspaceId: state.currentWorkspaceId,
+      projectId: state.currentProjectId,
+      experimentId,
+      evalType: normalizeEvalType(state.currentEvalType),
+      sourceType: normalizeSourceType(state.currentSourceType),
+      name: `${buildConfigTitle(state.rows)} · Run`,
+      status,
+      triggerSource: "manual",
+      ...(startedAt ? { startedAt } : {}),
+      ...(completedAt ? { completedAt } : {}),
+      config: {
+        provider,
+        baseUrl: endpoint,
+        models: [...selectedModels],
+        systemPrompt,
+        temperature,
+        outputTokenRatio,
+        scoreMethod: scoreConfig.scoreMethod,
+        judgeModel: scoreConfig.judgeModel,
+        judgePrompt: scoreConfig.judgePrompt,
+      },
+      rows,
+      summary: {
+        rowCount: rows.length,
+        modelCount: selectedModels.length,
+        successCalls,
+        totalCalls,
+      },
+    },
+  };
+
+  const response = await requestHistoryApi(
+    hasExisting
+      ? `${RUNS_API_ENDPOINT}?id=${encodeURIComponent(id)}&projectId=${encodeURIComponent(state.currentProjectId)}`
+      : `${RUNS_API_ENDPOINT}?projectId=${encodeURIComponent(state.currentProjectId)}`,
+    {
+      method: hasExisting ? "PATCH" : "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+
+  return response?.item ?? null;
+}
+
+function computeSuccessStats(rows = state.rows) {
+  let totalCalls = 0;
+  let successCalls = 0;
+
+  for (const row of rows) {
+    for (const result of Object.values(row.results || {})) {
+      if (!result || result.skipped) continue;
+      totalCalls += 1;
+      if (result.ok) {
+        successCalls += 1;
+      }
+    }
+  }
+
+  return { successCalls, totalCalls };
+}
+
+async function persistCurrentRunSnapshot(options = {}) {
+  if (!state.currentRunId || !state.currentExperimentId) return null;
+
+  const provider = normalizeProvider(el.providerSelect.value);
+  const endpoint = getChatEndpoint();
+  const selectedModels = getSelectedModels();
+  const { successCalls, totalCalls } = computeSuccessStats();
+  const payload = {
+    id: state.currentRunId,
+    experimentId: state.currentExperimentId,
+    provider,
+    endpoint,
+    selectedModels,
+    systemPrompt: el.systemPromptInput.value.trim(),
+    temperature: parseTemperature(),
+    outputTokenRatio: parseOutputTokenRatio(),
+    status: state.currentRunStatus || getRunCompletionStatus(successCalls, totalCalls),
+    rows: serializeRunRows(),
+    successCalls,
+    totalCalls,
+  };
+
+  const savedRun = await persistRunRecord(payload);
+  if (savedRun) {
+    setCurrentRunContext(savedRun);
+  }
+  renderEntityState();
+  if (!options.silent) {
+    setStatus("当前 Run 评分已保存", "ok");
+  }
+  return savedRun;
+}
+
+function queuePersistCurrentRunSnapshot(options = {}) {
+  runSyncQueue = runSyncQueue
+    .catch(() => null)
+    .then(() => persistCurrentRunSnapshot(options).catch((error) => {
+      if (!options.silent) {
+        setStatus(`Run 保存失败：${error instanceof Error ? error.message : String(error)}`, "warn");
+      }
+      return null;
+    }));
+  return runSyncQueue;
+}
+
 async function runWorkflow() {
-  if (state.running) return;
+  if (state.running || state.judgeRunning) return;
+
+  syncExperimentModeState();
+  if (isScenarioMode()) {
+    updateScenarioWorkbenchLink();
+    setStatus("场景模拟请在“场景评测”工作台执行；当前页用于统一归档与实验 / Run 关联。", "warn");
+    return;
+  }
 
   const provider = normalizeProvider(el.providerSelect.value);
   const apiKey = el.apiKeyInput.value.trim();
@@ -1333,68 +2724,232 @@ async function runWorkflow() {
 
   const systemPrompt = el.systemPromptInput.value.trim();
   const temperature = parseTemperature();
+  const outputTokenRatio = parseOutputTokenRatio();
+  const scoreConfig = getCurrentScoreConfig();
   el.temperatureInput.value = String(temperature);
 
-  clearResults(true);
-  setBusy(true);
+  if (scoreConfig.scoreMethod === SCORE_METHOD_JUDGE && !scoreConfig.judgeModel) {
+    setStatus("请先填写 Judge 模型 ID", "err");
+    return;
+  }
 
+  const savedExperiment = await saveCurrentConfig({ silent: true, source: "auto" });
+  const experimentId = savedExperiment?.id || state.currentExperimentId;
+
+  clearResults(true);
+
+  let activeRun = null;
+  let runRecordWarning = null;
+  try {
+    activeRun = await persistRunRecord({
+      experimentId,
+      provider,
+      endpoint,
+      selectedModels,
+      systemPrompt,
+      temperature,
+      outputTokenRatio,
+      status: "queued",
+      rows: serializeRunRows(),
+      successCalls: 0,
+      totalCalls: 0,
+    });
+    setCurrentRunContext(activeRun);
+    renderEntityState();
+  } catch (error) {
+    runRecordWarning = `运行记录初始化失败：${error instanceof Error ? error.message : String(error)}`;
+  }
+
+  setBusy(true);
+  const runStartedAt = Date.now();
+
+  if (activeRun?.id) {
+    try {
+      activeRun = await persistRunRecord({
+        id: activeRun.id,
+        experimentId,
+        provider,
+        endpoint,
+        selectedModels,
+        systemPrompt,
+        temperature,
+        outputTokenRatio,
+        status: "running",
+        startedAt: runStartedAt,
+        rows: serializeRunRows(),
+        successCalls: 0,
+        totalCalls: 0,
+      });
+      setCurrentRunContext(activeRun);
+    } catch {
+      state.currentRunStatus = "running";
+      state.currentRunUpdatedAt = runStartedAt;
+      renderEntityState();
+    }
+  } else {
+    state.currentRunStatus = "running";
+    state.currentRunUpdatedAt = runStartedAt;
+    renderEntityState();
+  }
+
+  const isMultiTurnRun = state.currentEvalType === EVAL_TYPE_MULTI_TURN;
   const histories = {};
-  for (const modelId of selectedModels) {
-    histories[modelId] = buildInitialHistory(systemPrompt);
+  if (isMultiTurnRun) {
+    for (const modelId of selectedModels) {
+      histories[modelId] = buildInitialHistory(systemPrompt);
+    }
   }
 
   let totalCalls = 0;
   let successCalls = 0;
 
-  for (let rowIndex = 0; rowIndex < state.rows.length; rowIndex += 1) {
-    const row = state.rows[rowIndex];
-    const prompt = row.prompt.trim();
+  try {
+    for (let rowIndex = 0; rowIndex < state.rows.length; rowIndex += 1) {
+      const row = state.rows[rowIndex];
+      const prompt = row.prompt.trim();
 
-    if (!prompt) {
-      for (const modelId of selectedModels) {
-        row.results[modelId] = {
-          modelId,
-          ok: false,
-          skipped: true,
-          latencyMs: 0,
-          usage: null,
-          content: "(该轮 Prompt 为空，已跳过)",
-        };
+      if (!prompt) {
+        for (const modelId of selectedModels) {
+          row.results[modelId] = {
+            modelId,
+            ok: false,
+            skipped: true,
+            latencyMs: 0,
+            usage: null,
+            content: "(该轮 Prompt 为空，已跳过)",
+          };
+        }
+        renderCaseTableBody();
+        continue;
       }
+
+      setStatus(`执行中：${getRowUnitLabel()} ${rowIndex + 1}/${state.rows.length}`, "warn");
+
+      const roundResults = await Promise.all(
+        selectedModels.map((modelId) =>
+          requestByModel({
+            apiKey,
+            modelId,
+            prompt,
+            history: isMultiTurnRun ? histories[modelId] : buildInitialHistory(systemPrompt),
+            temperature,
+            provider,
+            endpoint,
+          }),
+        ),
+      );
+
+      for (const result of roundResults) {
+        row.results[result.modelId] = result;
+        totalCalls += 1;
+        if (result.ok) {
+          successCalls += 1;
+        }
+      }
+
+      if (scoreConfig.scoreMethod === SCORE_METHOD_EXACT) {
+        applyExactScoresForRows([row]);
+      }
+
       renderCaseTableBody();
-      continue;
-    }
 
-    setStatus(`执行中：第 ${rowIndex + 1}/${state.rows.length} 个环节`, "warn");
-
-    const roundResults = await Promise.all(
-      selectedModels.map((modelId) =>
-        requestByModel({
+      if (scoreConfig.scoreMethod === SCORE_METHOD_JUDGE) {
+        await scoreRowsWithJudge([row], {
           apiKey,
-          modelId,
-          prompt,
-          history: histories[modelId],
-          temperature,
           provider,
           endpoint,
-        }),
-      ),
-    );
-
-    for (const result of roundResults) {
-      row.results[result.modelId] = result;
-      totalCalls += 1;
-      if (result.ok) {
-        successCalls += 1;
+          judgeModel: scoreConfig.judgeModel,
+          judgePrompt: scoreConfig.judgePrompt,
+          silent: true,
+        });
       }
-    }
 
-    renderCaseTableBody();
+      renderCaseTableBody();
+    }
+  } catch (error) {
+    const failedAt = Date.now();
+    setBusy(false);
+    if (activeRun?.id) {
+      try {
+        activeRun = await persistRunRecord({
+          id: activeRun.id,
+          experimentId,
+          provider,
+          endpoint,
+          selectedModels,
+          systemPrompt,
+          temperature,
+          outputTokenRatio,
+          status: "failed",
+          startedAt: runStartedAt,
+          completedAt: failedAt,
+          rows: serializeRunRows(),
+          successCalls,
+          totalCalls,
+        });
+        setCurrentRunContext(activeRun);
+      } catch {
+        state.currentRunStatus = "failed";
+        state.currentRunCompletedAt = failedAt;
+        state.currentRunUpdatedAt = failedAt;
+        renderEntityState();
+      }
+    } else {
+      state.currentRunStatus = "failed";
+      state.currentRunCompletedAt = failedAt;
+      state.currentRunUpdatedAt = failedAt;
+      renderEntityState();
+    }
+    setStatus(`执行失败：${error instanceof Error ? error.message : String(error)}`, "err");
+    return;
   }
 
   setBusy(false);
-  saveCurrentConfig({ silent: true, source: "auto" });
-  setStatus(`执行完成：成功 ${successCalls}/${totalCalls}`, successCalls === totalCalls ? "ok" : "err");
+
+  const finalStatus = getRunCompletionStatus(successCalls, totalCalls);
+  const completedAt = Date.now();
+  let recordSaveError = null;
+  let savedRun = null;
+  try {
+    savedRun = await persistRunRecord({
+      id: activeRun?.id,
+      experimentId,
+      provider,
+      endpoint,
+      selectedModels,
+      systemPrompt,
+      temperature,
+      outputTokenRatio,
+      status: finalStatus,
+      startedAt: runStartedAt,
+      completedAt,
+      rows: serializeRunRows(),
+      successCalls,
+      totalCalls,
+    });
+    setCurrentRunContext(savedRun);
+  } catch (error) {
+    recordSaveError = error;
+  }
+
+  if (recordSaveError) {
+    state.currentRunStatus = finalStatus;
+    state.currentRunCompletedAt = completedAt;
+    state.currentRunUpdatedAt = completedAt;
+    renderEntityState();
+    const detail = recordSaveError instanceof Error ? recordSaveError.message : String(recordSaveError);
+    const suffix = runRecordWarning ? `；${runRecordWarning}` : "";
+    setStatus(`执行完成：成功 ${successCalls}/${totalCalls}，但运行记录保存失败（${detail}）${suffix}`, "warn");
+    return;
+  }
+
+  const successType = successCalls === totalCalls ? "ok" : (successCalls > 0 ? "warn" : "err");
+  if (runRecordWarning) {
+    setStatus(`执行完成：成功 ${successCalls}/${totalCalls}。${runRecordWarning}`, "warn");
+    return;
+  }
+
+  setStatus(`执行完成：成功 ${successCalls}/${totalCalls}`, successType);
 }
 
 function exportJson() {
@@ -1407,6 +2962,7 @@ function exportJson() {
       temperature: parseTemperature(),
       outputTokenRatio: parseOutputTokenRatio(),
       systemPrompt: el.systemPromptInput.value,
+      ...getCurrentScoreConfig(),
       selectedModels: state.selectedModels,
     },
     rows: state.rows,
@@ -1451,11 +3007,13 @@ async function handlePromptFileSelected(event) {
       return;
     }
 
+    state.currentSourceType = SOURCE_TYPE_PROMPT_FILE;
+    syncExperimentModeState({ prefer: "source" });
     state.rows = prompts.map((prompt) => createRow(prompt));
     clearResults(true);
     renderCaseTable();
     saveCurrentConfig({ silent: true, source: "auto" });
-    setStatus(`已导入 ${prompts.length} 个环节：${file.name}`, "ok");
+    setStatus(`已导入 ${prompts.length} 条内容：${file.name}`, "ok");
   } catch (error) {
     setStatus(`读取文件失败：${error instanceof Error ? error.message : String(error)}`, "err");
   }
@@ -1467,19 +3025,31 @@ function addRow() {
 }
 
 function clearRows() {
+  state.currentSourceType = SOURCE_TYPE_MANUAL;
+  syncExperimentModeState({ prefer: "source" });
   state.rows = [createRow("")];
   renderCaseTableBody();
-  setStatus("已清空环节，仅保留一行", "ok");
+  setStatus("已清空内容，仅保留一行", "ok");
 }
 
 function bindEvents() {
   el.runWorkflowBtn.addEventListener("click", runWorkflow);
+  if (el.runJudgeBtn) {
+    el.runJudgeBtn.addEventListener("click", () => {
+      void runJudgeForCurrentResults({ silent: false, persist: true });
+    });
+  }
   el.clearResultsBtn.addEventListener("click", () => clearResults(false));
   el.exportBtn.addEventListener("click", exportJson);
   el.refreshModelsBtn.addEventListener("click", () => loadOfficialModels(true));
   el.addModelColBtn.addEventListener("click", addModelColumn);
   el.saveConfigBtn.addEventListener("click", () => saveCurrentConfig({ silent: false, source: "manual" }));
   el.clearHistoryBtn.addEventListener("click", clearConfigHistory);
+  if (el.refreshScenarioSessionsBtn) {
+    el.refreshScenarioSessionsBtn.addEventListener("click", () => {
+      void loadScenarioSessions({ silent: false, force: true });
+    });
+  }
   el.importPromptBtn.addEventListener("click", () => el.promptFileInput.click());
   el.promptFileInput.addEventListener("change", handlePromptFileSelected);
   el.addRowBtn.addEventListener("click", addRow);
@@ -1487,6 +3057,65 @@ function bindEvents() {
 
   el.rememberKeyInput.addEventListener("change", saveApiKeyPreference);
   el.apiKeyInput.addEventListener("blur", saveApiKeyPreference);
+  if (el.globalScoreMethod) {
+    el.globalScoreMethod.addEventListener("change", () => {
+      const scoreMethod = normalizeScoreMethod(el.globalScoreMethod.value);
+      if (scoreMethod === SCORE_METHOD_EXACT) {
+        applyExactScoresForRows();
+        renderCaseTableBody();
+      } else {
+        renderScoreControls();
+      }
+      if (state.currentExperimentId) {
+        void saveCurrentConfig({ silent: true, source: "auto" });
+      }
+      setStatus(`已切换评分方式：${getScoreMethodLabel(scoreMethod)}`, "ok");
+    });
+  }
+  if (el.judgeModelInput) {
+    el.judgeModelInput.addEventListener("blur", () => {
+      el.judgeModelInput.value = String(el.judgeModelInput.value || "").trim() || DEFAULT_JUDGE_MODEL;
+      renderScoreControls();
+      if (state.currentExperimentId) {
+        void saveCurrentConfig({ silent: true, source: "auto" });
+      }
+    });
+  }
+  if (el.judgePromptInput) {
+    el.judgePromptInput.addEventListener("blur", () => {
+      el.judgePromptInput.value = String(el.judgePromptInput.value || "").trim() || DEFAULT_JUDGE_PROMPT;
+      renderScoreControls();
+      if (state.currentExperimentId) {
+        void saveCurrentConfig({ silent: true, source: "auto" });
+      }
+    });
+  }
+  if (el.evalTypeSelect) {
+    el.evalTypeSelect.addEventListener("change", () => {
+      state.currentEvalType = normalizeEvalType(el.evalTypeSelect.value);
+      syncExperimentModeState({ prefer: "eval" });
+      clearResults(true);
+      renderCaseTable();
+      updateWorkbenchSummary();
+      if (state.currentExperimentId) {
+        void saveCurrentConfig({ silent: true, source: "auto" });
+      }
+      setStatus(`已切换评测类型：${getEvalTypeLabel(state.currentEvalType)}`, "ok");
+    });
+  }
+  if (el.sourceTypeSelect) {
+    el.sourceTypeSelect.addEventListener("change", () => {
+      state.currentSourceType = normalizeSourceType(el.sourceTypeSelect.value);
+      syncExperimentModeState({ prefer: "source" });
+      clearResults(true);
+      renderCaseTable();
+      updateWorkbenchSummary();
+      if (state.currentExperimentId) {
+        void saveCurrentConfig({ silent: true, source: "auto" });
+      }
+      setStatus(`已切换输入来源：${getSourceTypeLabel(state.currentSourceType)}`, "ok");
+    });
+  }
   el.providerSelect.addEventListener("change", () => handleProviderChanged({ silent: false }));
   el.baseUrlInput.addEventListener("blur", () => {
     el.baseUrlInput.value = sanitizeBaseUrl(el.baseUrlInput.value);
@@ -1500,14 +3129,16 @@ function bindEvents() {
   });
 }
 
-function init() {
+async function init() {
   hydrateApiKeyPreference();
   hydrateProviderPreference();
   hydrateBaseUrlPreference();
   updateProviderUI();
 
+  await hydratePlatformContext();
   state.configHistory = readLocalHistoryBackup(getHistoryNamespace());
   state.rows = [createRow("")];
+  applyScoreConfigToForm({});
 
   bindEvents();
   renderModelColumns();
@@ -1515,8 +3146,9 @@ function init() {
   renderHistoryList();
   updateWorkbenchSummary();
 
-  void loadConfigHistoryFromServer({ silent: true });
+  await loadConfigHistoryFromServer({ silent: true });
+  await restorePageContext();
   void loadOfficialModels(false);
 }
 
-init();
+void init();

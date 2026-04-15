@@ -39,6 +39,11 @@ node server.js
 
 打开 `http://127.0.0.1:8080`
 
+## 开发入口（当前双线）
+
+- 平台线（现有 Web 版本）：在仓库根目录运行 `npm run dev`
+- Local-Eval 线（Promptfoo + 本地桌面壳）：进入 `apps/local-eval` 后运行 `npm run dev`
+
 ## 使用流程
 
 1. 在模型列配置区添加模型列，每列填写接口来源、API Key、模型 ID

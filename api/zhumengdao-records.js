@@ -90,6 +90,11 @@ function normalizeRecord(item) {
 
   return {
     id: toSafeString(item.id, 120) || `rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    workspaceId: toSafeString(item.workspaceId, 120) || "ws-default",
+    projectId: toSafeString(item.projectId, 120) || "proj-default",
+    experimentId: toSafeString(item.experimentId, 120),
+    linkedRunId: toSafeString(item.linkedRunId || item.runId, 120),
+    reportId: toSafeString(item.reportId, 120),
     createdAt: createdAt || Date.now(),
     action: normalizeAction(item.action),
     sessionId: toSafeString(item.sessionId, 120),
@@ -256,7 +261,17 @@ module.exports = async function handler(req, res) {
   try {
     if (req.method === "GET") {
       const limit = sanitizeLimit(req.query?.limit);
-      const items = await readRecords(limit);
+      const projectId = toSafeString(req.query?.projectId, 120);
+      const experimentId = toSafeString(req.query?.experimentId, 120);
+      const linkedRunId = toSafeString(req.query?.linkedRunId || req.query?.runId, 120);
+      const sessionId = toSafeString(req.query?.sessionId, 120);
+      const items = (await readRecords(limit)).filter((record) => {
+        if (projectId && record.projectId !== projectId) return false;
+        if (experimentId && record.experimentId !== experimentId) return false;
+        if (linkedRunId && record.linkedRunId !== linkedRunId) return false;
+        if (sessionId && record.sessionId !== sessionId) return false;
+        return true;
+      });
       sendJson(res, 200, {
         storage: "vercel-kv",
         items,

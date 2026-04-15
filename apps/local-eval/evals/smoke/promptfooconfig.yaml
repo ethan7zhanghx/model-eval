@@ -1,0 +1,15 @@
+description: Local Eval smoke test
+prompts:
+  - "{{input}}"
+providers:
+  - id: openrouter:openai/gpt-4.1-mini
+    config:
+      apiKeyEnvar: OPENROUTER_API_KEY
+  - id: openai:gpt-4.1-mini
+    config:
+      apiKeyEnvar: OPENAI_API_KEY
+      apiBaseUrl: "{{OPENAI_COMPAT_BASE_URL}}"
+defaultTest:
+  options:
+    transformVars: "{ ...vars, input: vars.input || '' }"
+tests: file://dataset.csv

@@ -1,0 +1,13 @@
+{
+  "name": "local-eval-desktop",
+  "version": "0.1.0-local",
+  "private": true,
+  "type": "module",
+  "description": "Local-first model evaluation workspace based on Promptfoo",
+  "scripts": {
+    "dev": "node src/server/dev.js",
+    "build:web": "node src/web/build.js",
+    "package": "node src/main/package.js",
+    "make:release": "node scripts/make-release.js"
+  }
+}

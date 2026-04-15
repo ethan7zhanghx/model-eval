@@ -98,6 +98,11 @@ function normalizeSession(item) {
 
   return {
     id: toSafeString(item.id, 120) || `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    workspaceId: toSafeString(item.workspaceId, 120) || "ws-default",
+    projectId: toSafeString(item.projectId, 120) || "proj-default",
+    experimentId: toSafeString(item.experimentId, 120),
+    linkedRunId: toSafeString(item.linkedRunId || item.runId, 120),
+    reportId: toSafeString(item.reportId, 120),
     createdAt: createdAt || Date.now(),
     updatedAt: updatedAt || Date.now(),
     roleId: toSafeString(item.roleId, 120),
@@ -152,7 +157,10 @@ module.exports = async function handler(req, res) {
     if (req.method === "GET") {
       const urlObj = new URL(req.url, `http://${req.headers.host || "localhost"}`);
       const id = urlObj.searchParams.get("id");
-      const deviceId = urlObj.searchParams.get("deviceId") || "";
+      const deviceId = toSafeString(urlObj.searchParams.get("deviceId"), 120);
+      const projectId = toSafeString(urlObj.searchParams.get("projectId"), 120);
+      const experimentId = toSafeString(urlObj.searchParams.get("experimentId"), 120);
+      const linkedRunId = toSafeString(urlObj.searchParams.get("linkedRunId") || urlObj.searchParams.get("runId"), 120);
       const sessions = await readSessions();
 
       if (id) {
@@ -163,7 +171,13 @@ module.exports = async function handler(req, res) {
       }
 
       const limit = sanitizeLimit(urlObj.searchParams.get("limit") || "200");
-      const filtered = deviceId ? sessions.filter((s) => s.deviceId === deviceId) : sessions;
+      const filtered = sessions.filter((session) => {
+        if (deviceId && session.deviceId !== deviceId) return false;
+        if (projectId && session.projectId !== projectId) return false;
+        if (experimentId && session.experimentId !== experimentId) return false;
+        if (linkedRunId && session.linkedRunId !== linkedRunId) return false;
+        return true;
+      });
       sendJson(res, 200, { sessions: filtered.slice(0, limit), total: filtered.length });
       return;
     }

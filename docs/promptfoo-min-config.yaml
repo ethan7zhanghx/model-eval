@@ -1,0 +1,34 @@
+# 最小 Promptfoo 配置模板（注释可删除）
+prompts:
+  - label: Default Prompt
+    prompt: |
+      {{system}}
+      User: {{input}}
+      Assistant:
+providers:
+  - id: openrouter:gpt-4o-mini
+    config:
+      apiKeyEnvar: OPENROUTER_API_KEY
+  - id: openai:gpt-4.1-mini
+    config:
+      apiKeyEnvar: OPENAI_API_KEY
+      apiBaseUrl: {{OPENAI_COMPAT_BASE_URL}}
+      label: 内部网关
+      useCache: false
+tests:
+  - vars:
+      input: "介绍一下你自己"
+      expected: "你好"
+    assert:
+      - type: contains
+        value: "你好"
+  - vars:
+      input: "2+2?"
+      expected: "4"
+    assert:
+      - type: exact
+        value: "4"
+settings:
+  confidenceInterval: 0.9
+  outputPath: ./results
+  telemetryEnabled: false

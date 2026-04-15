@@ -2,6 +2,8 @@ const http = require("node:http");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { Readable } = require("node:stream");
+const platformStore = require("./lib/platform-store");
+const { createPlatformApi } = require("./lib/platform-api");
 
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -144,6 +146,11 @@ function normalizeZmdRecord(item) {
 
   return {
     id: toSafeString(item.id, 120) || `rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    workspaceId: toSafeString(item.workspaceId, 120) || platformStore.DEFAULT_WORKSPACE_ID,
+    projectId: toSafeString(item.projectId, 120) || platformStore.DEFAULT_PROJECT_ID,
+    experimentId: toSafeString(item.experimentId, 120),
+    linkedRunId: toSafeString(item.linkedRunId || item.runId, 120),
+    reportId: toSafeString(item.reportId, 120),
     createdAt: createdAt || Date.now(),
     action: normalizeZmdAction(item.action),
     sessionId: toSafeString(item.sessionId, 120),
@@ -351,6 +358,11 @@ function normalizeZmdSession(item) {
 
   return {
     id: toSafeString(item.id, 120) || `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    workspaceId: toSafeString(item.workspaceId, 120) || platformStore.DEFAULT_WORKSPACE_ID,
+    projectId: toSafeString(item.projectId, 120) || platformStore.DEFAULT_PROJECT_ID,
+    experimentId: toSafeString(item.experimentId, 120),
+    linkedRunId: toSafeString(item.linkedRunId || item.runId, 120),
+    reportId: toSafeString(item.reportId, 120),
     createdAt: createdAt || Date.now(),
     updatedAt: updatedAt || Date.now(),
     roleId: toSafeString(item.roleId, 120),
@@ -368,6 +380,7 @@ function normalizeZmdSession(item) {
       endpointHostB: toSafeString(config.endpointHostB, 200),
     },
     turnCount: Math.max(0, Math.floor(toSafeNumber(item.turnCount) || 0)),
+    deviceId: toSafeString(item.deviceId, 120),
     archivedAt: archivedAt != null && archivedAt > 0 ? archivedAt : null,
     messages,
   };
@@ -406,6 +419,10 @@ async function handleZmdSessionsApi(req, res, urlObj) {
 
   if (req.method === "GET") {
     const id = urlObj.searchParams.get("id");
+    const deviceId = toSafeString(urlObj.searchParams.get("deviceId"), 120);
+    const projectId = toSafeString(urlObj.searchParams.get("projectId"), 120);
+    const experimentId = toSafeString(urlObj.searchParams.get("experimentId"), 120);
+    const linkedRunId = toSafeString(urlObj.searchParams.get("linkedRunId") || urlObj.searchParams.get("runId"), 120);
     const sessions = await readZmdSessions();
     if (id) {
       const found = sessions.find((s) => s.id === id);
@@ -414,7 +431,14 @@ async function handleZmdSessionsApi(req, res, urlObj) {
       return;
     }
     const limit = sanitizeLimit(urlObj.searchParams.get("limit") || "200");
-    sendJson(res, 200, { sessions: sessions.slice(0, limit), total: sessions.length });
+    const filtered = sessions.filter((session) => {
+      if (deviceId && session.deviceId !== deviceId) return false;
+      if (projectId && session.projectId !== projectId) return false;
+      if (experimentId && session.experimentId !== experimentId) return false;
+      if (linkedRunId && session.linkedRunId !== linkedRunId) return false;
+      return true;
+    });
+    sendJson(res, 200, { sessions: filtered.slice(0, limit), total: filtered.length });
     return;
   }
 
@@ -570,13 +594,218 @@ async function parseJsonBody(req) {
   return JSON.parse(raw);
 }
 
-async function handleHistoryApi(req, res, urlObj) {
-  const workspace = sanitizeWorkspaceId(urlObj.searchParams.get("workspace"));
+const platformApi = createPlatformApi({
+  rootDir: ROOT_DIR,
+  platformStore,
+  sendJson,
+  parseJsonBody,
+  sanitizeLimit,
+  sanitizeWorkspaceId,
+  maxConfigHistory: MAX_CONFIG_HISTORY,
+});
+
+function sanitizeEntityId(value) {
+  return toSafeString(value, 120);
+}
+
+function resolveProjectId(urlObj) {
+  return sanitizeEntityId(urlObj.searchParams.get("projectId")) || platformStore.DEFAULT_PROJECT_ID;
+}
+
+function historyItemToExperimentInput(item, projectId) {
+  return {
+    id: item?.id,
+    workspaceId: platformStore.DEFAULT_WORKSPACE_ID,
+    projectId,
+    name: item?.title,
+    evalType: Array.isArray(item?.rows) && item.rows.length > 1 ? "multi_turn" : "single_turn",
+    status: item?.status || "draft",
+    createdAt: item?.savedAt,
+    updatedAt: item?.savedAt,
+    lastOpenedAt: item?.savedAt,
+    config: {
+      provider: item?.provider,
+      baseUrl: item?.baseUrl,
+      temperature: item?.temperature,
+      outputTokenRatio: item?.outputTokenRatio,
+      systemPrompt: item?.systemPrompt,
+      selectedModels: item?.selectedModels,
+      rows: item?.rows,
+    },
+  };
+}
+
+function runItemToRunInput(item, projectId) {
+  return {
+    id: item?.id,
+    workspaceId: platformStore.DEFAULT_WORKSPACE_ID,
+    projectId,
+    experimentId: item?.experimentId,
+    name: item?.name,
+    status: item?.status,
+    triggerSource: item?.triggerSource,
+    createdAt: item?.createdAt || item?.savedAt,
+    updatedAt: item?.updatedAt || item?.savedAt,
+    startedAt: item?.startedAt || item?.savedAt,
+    completedAt: item?.completedAt || item?.savedAt,
+    config: item?.config,
+    rows: item?.rows,
+    summary: item?.summary,
+  };
+}
+
+async function handleBootstrapApi(req, res) {
+  if (req.method !== "GET") {
+    sendJson(res, 405, { error: "Method not allowed" });
+    return;
+  }
+
+  const payload = await platformStore.getBootstrap(ROOT_DIR);
+  sendJson(res, 200, payload);
+}
+
+async function handleRecentWorkApi(req, res, urlObj) {
+  if (req.method !== "GET") {
+    sendJson(res, 405, { error: "Method not allowed" });
+    return;
+  }
+
+  const payload = await platformStore.getRecentWork(ROOT_DIR, {
+    projectId: resolveProjectId(urlObj),
+    experimentsLimit: Math.min(20, sanitizeLimit(urlObj.searchParams.get("experimentsLimit") || "5")),
+    runsLimit: Math.min(20, sanitizeLimit(urlObj.searchParams.get("runsLimit") || "5")),
+  });
+  sendJson(res, 200, payload);
+}
+
+async function handleExperimentsApi(req, res, urlObj) {
+  const id = sanitizeEntityId(urlObj.searchParams.get("id"));
+  const projectId = resolveProjectId(urlObj);
 
   if (req.method === "GET") {
-    const db = await readHistoryDb();
-    const items = Array.isArray(db[workspace]) ? db[workspace].map(normalizeHistoryItem).filter(Boolean) : [];
-    sendJson(res, 200, { workspace, items: items.slice(0, MAX_CONFIG_HISTORY) });
+    if (id) {
+      const item = await platformStore.getExperiment(ROOT_DIR, id);
+      if (!item) {
+        sendJson(res, 404, { error: "Experiment not found" });
+        return;
+      }
+      sendJson(res, 200, { item });
+      return;
+    }
+
+    const limit = Math.min(200, sanitizeLimit(urlObj.searchParams.get("limit") || "50"));
+    const items = await platformStore.listExperiments(ROOT_DIR, { projectId, limit });
+    sendJson(res, 200, { items, total: items.length, projectId });
+    return;
+  }
+
+  if (req.method === "POST" || req.method === "PATCH") {
+    let body;
+    try {
+      body = await parseJsonBody(req);
+    } catch (error) {
+      sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) });
+      return;
+    }
+
+    const incoming = body?.item && typeof body.item === "object" ? body.item : body;
+    const saved = await platformStore.upsertExperiment(ROOT_DIR, {
+      ...incoming,
+      id: incoming?.id || id,
+      workspaceId: incoming?.workspaceId || platformStore.DEFAULT_WORKSPACE_ID,
+      projectId: incoming?.projectId || projectId,
+      touchLastOpened: !!body?.touchLastOpened,
+    });
+
+    if (!saved) {
+      sendJson(res, 400, { error: "Invalid experiment payload" });
+      return;
+    }
+
+    sendJson(res, req.method === "POST" ? 201 : 200, { item: saved });
+    return;
+  }
+
+  if (req.method === "DELETE") {
+    if (!id) {
+      sendJson(res, 400, { error: "Experiment id is required" });
+      return;
+    }
+    const ok = await platformStore.deleteExperiment(ROOT_DIR, id);
+    if (!ok) {
+      sendJson(res, 404, { error: "Experiment not found" });
+      return;
+    }
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  sendJson(res, 405, { error: "Method not allowed" });
+}
+
+async function handleRunsApi(req, res, urlObj) {
+  const id = sanitizeEntityId(urlObj.searchParams.get("id"));
+  const projectId = resolveProjectId(urlObj);
+
+  if (req.method === "GET") {
+    if (id) {
+      const item = await platformStore.getRun(ROOT_DIR, id);
+      if (!item) {
+        sendJson(res, 404, { error: "Run not found" });
+        return;
+      }
+      sendJson(res, 200, { item });
+      return;
+    }
+
+    const limit = Math.min(500, sanitizeLimit(urlObj.searchParams.get("limit") || "100"));
+    const items = await platformStore.listRuns(ROOT_DIR, { projectId, limit });
+    sendJson(res, 200, { items, total: items.length, projectId });
+    return;
+  }
+
+  if (req.method === "POST" || req.method === "PATCH") {
+    let body;
+    try {
+      body = await parseJsonBody(req);
+    } catch (error) {
+      sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) });
+      return;
+    }
+
+    const incoming = body?.item && typeof body.item === "object" ? body.item : body;
+    const saved = await platformStore.upsertRun(ROOT_DIR, {
+      ...incoming,
+      id: incoming?.id || id,
+      workspaceId: incoming?.workspaceId || platformStore.DEFAULT_WORKSPACE_ID,
+      projectId: incoming?.projectId || projectId,
+    });
+
+    if (!saved) {
+      sendJson(res, 400, { error: "Invalid run payload" });
+      return;
+    }
+
+    sendJson(res, req.method === "POST" ? 201 : 200, { item: saved });
+    return;
+  }
+
+  if (req.method === "DELETE") {
+    const ok = await platformStore.deleteRun(ROOT_DIR, id);
+    sendJson(res, 200, { ok });
+    return;
+  }
+
+  sendJson(res, 405, { error: "Method not allowed" });
+}
+
+async function handleHistoryApi(req, res, urlObj) {
+  const workspace = sanitizeWorkspaceId(urlObj.searchParams.get("workspace"));
+  const projectId = resolveProjectId(urlObj);
+
+  if (req.method === "GET") {
+    const items = await platformStore.listExperiments(ROOT_DIR, { projectId, limit: MAX_CONFIG_HISTORY });
+    sendJson(res, 200, { workspace, items });
     return;
   }
 
@@ -590,20 +819,19 @@ async function handleHistoryApi(req, res, urlObj) {
     }
 
     const incomingItems = Array.isArray(body?.items) ? body.items : [];
-    const normalized = incomingItems.map(normalizeHistoryItem).filter(Boolean).slice(0, MAX_CONFIG_HISTORY);
-
-    const db = await readHistoryDb();
-    db[workspace] = normalized;
-    await writeHistoryDb(db);
-
-    sendJson(res, 200, { workspace, items: normalized });
+    for (const item of incomingItems.slice(0, MAX_CONFIG_HISTORY)) {
+      await platformStore.upsertExperiment(ROOT_DIR, historyItemToExperimentInput(item, projectId));
+    }
+    const items = await platformStore.listExperiments(ROOT_DIR, { projectId, limit: MAX_CONFIG_HISTORY });
+    sendJson(res, 200, { workspace, items });
     return;
   }
 
   if (req.method === "DELETE") {
-    const db = await readHistoryDb();
-    db[workspace] = [];
-    await writeHistoryDb(db);
+    const items = await platformStore.listExperiments(ROOT_DIR, { projectId, limit: MAX_CONFIG_HISTORY });
+    for (const item of items) {
+      await platformStore.deleteExperiment(ROOT_DIR, item.id);
+    }
     sendJson(res, 200, { workspace, items: [] });
     return;
   }
@@ -614,8 +842,19 @@ async function handleHistoryApi(req, res, urlObj) {
 async function handleZmdRecordsApi(req, res, urlObj) {
   if (req.method === "GET") {
     const limit = sanitizeLimit(urlObj.searchParams.get("limit"));
+    const projectId = toSafeString(urlObj.searchParams.get("projectId"), 120);
+    const experimentId = toSafeString(urlObj.searchParams.get("experimentId"), 120);
+    const linkedRunId = toSafeString(urlObj.searchParams.get("linkedRunId") || urlObj.searchParams.get("runId"), 120);
+    const sessionId = toSafeString(urlObj.searchParams.get("sessionId"), 120);
     const records = await readZmdRecords();
-    const items = records.slice(0, limit);
+    const filtered = records.filter((record) => {
+      if (projectId && record.projectId !== projectId) return false;
+      if (experimentId && record.experimentId !== experimentId) return false;
+      if (linkedRunId && record.linkedRunId !== linkedRunId) return false;
+      if (sessionId && record.sessionId !== sessionId) return false;
+      return true;
+    });
+    const items = filtered.slice(0, limit);
     sendJson(res, 200, {
       storage: "local-file",
       items,
@@ -744,36 +983,39 @@ async function writeEvalResults(items) {
 }
 
 async function handleEvalResultsApi(req, res, urlObj) {
+  const projectId = resolveProjectId(urlObj);
+
   if (req.method === "GET") {
-    const limit = sanitizeLimit(urlObj.searchParams.get("limit") || "100");
-    const results = await readEvalResults();
-    sendJson(res, 200, { items: results.slice(0, limit), total: results.length });
+    const limit = Math.min(500, sanitizeLimit(urlObj.searchParams.get("limit") || "100"));
+    const items = await platformStore.listRuns(ROOT_DIR, { projectId, limit });
+    sendJson(res, 200, { items, total: items.length });
     return;
   }
 
   if (req.method === "POST") {
     let body;
-    try { body = await parseJsonBody(req); }
-    catch (error) { sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) }); return; }
-    const item = normalizeEvalResult(body?.item);
-    if (!item) { sendJson(res, 400, { error: "Invalid eval result" }); return; }
-    const results = await readEvalResults();
-    const idx = results.findIndex((r) => r.id === item.id);
-    if (idx >= 0) { results[idx] = item; } else { results.unshift(item); }
-    await writeEvalResults(results.slice(0, MAX_EVAL_RESULTS));
-    sendJson(res, 200, { item });
+    try {
+      body = await parseJsonBody(req);
+    } catch (error) {
+      sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) });
+      return;
+    }
+
+    const item = body?.item && typeof body.item === "object" ? body.item : body;
+    const saved = await platformStore.upsertRun(ROOT_DIR, runItemToRunInput(item, projectId));
+    if (!saved) {
+      sendJson(res, 400, { error: "Invalid eval result" });
+      return;
+    }
+
+    sendJson(res, 200, { item: saved });
     return;
   }
 
   if (req.method === "DELETE") {
-    const id = urlObj.searchParams.get("id");
-    if (id) {
-      const results = await readEvalResults();
-      await writeEvalResults(results.filter((r) => r.id !== id));
-    } else {
-      await writeEvalResults([]);
-    }
-    sendJson(res, 200, { ok: true });
+    const id = sanitizeEntityId(urlObj.searchParams.get("id"));
+    const ok = await platformStore.deleteRun(ROOT_DIR, id);
+    sendJson(res, 200, { ok: id ? ok : true });
     return;
   }
 
@@ -830,9 +1072,63 @@ const server = http.createServer(async (req, res) => {
   const host = req.headers.host || `localhost:${PORT}`;
   const urlObj = new URL(req.url || "/", `http://${host}`);
 
+  if (urlObj.pathname === "/api/bootstrap") {
+    try {
+      await platformApi.handleBootstrapApi(req, res);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
+  if (urlObj.pathname === "/api/recent-work") {
+    try {
+      await platformApi.handleRecentWorkApi(req, res, urlObj);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
+  if (urlObj.pathname === "/api/experiments") {
+    try {
+      await platformApi.handleExperimentsApi(req, res, urlObj);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
+  if (urlObj.pathname === "/api/runs") {
+    try {
+      await platformApi.handleRunsApi(req, res, urlObj);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
+  if (urlObj.pathname === "/api/score-records") {
+    try {
+      await platformApi.handleScoreRecordsApi(req, res, urlObj);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
+  if (urlObj.pathname === "/api/reports") {
+    try {
+      await platformApi.handleReportsApi(req, res, urlObj);
+    } catch (error) {
+      sendJson(res, 500, { error: "Server error", detail: String(error) });
+    }
+    return;
+  }
+
   if (urlObj.pathname === "/api/config-history") {
     try {
-      await handleHistoryApi(req, res, urlObj);
+      await platformApi.handleHistoryApi(req, res, urlObj);
     } catch (error) {
       sendJson(res, 500, { error: "Server error", detail: String(error) });
     }
@@ -873,7 +1169,7 @@ const server = http.createServer(async (req, res) => {
 
   if (urlObj.pathname === "/api/eval-results") {
     try {
-      await handleEvalResultsApi(req, res, urlObj);
+      await platformApi.handleEvalResultsApi(req, res, urlObj);
     } catch (error) {
       sendJson(res, 500, { error: "Server error", detail: String(error) });
     }

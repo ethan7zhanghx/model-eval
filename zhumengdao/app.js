@@ -7,6 +7,14 @@ const LS_KEY_CONFIG = "zhumengdao-dual-chat-config-v2";
 const LS_KEY_SESSION = "zhumengdao-last-session-id";
 const LS_KEY_DEVICE = "zhumengdao-device-id";
 const MAX_STATS_RECORDS = 1000;
+const DEFAULT_WORKSPACE_ID = "ws-default";
+const DEFAULT_PROJECT_ID = "proj-default";
+
+function sanitizeEntityId(value, fallback = "") {
+  const cleaned = String(value || "").trim().replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 120);
+  return cleaned || fallback;
+}
+
 
 function getDeviceId() {
   let id = localStorage.getItem(LS_KEY_DEVICE);
@@ -39,8 +47,15 @@ const state = {
   sessionId: "",
   sessionCreatedAt: 0,
   turnOrder: 0,
+  workspaceId: DEFAULT_WORKSPACE_ID,
+  projectId: DEFAULT_PROJECT_ID,
+  experimentId: "",
+  linkedRunId: "",
+  reportId: "",
+  requestedSessionId: "",
   storageReady: false,
   serverDefaultKeys: { a: false, b: false },
+  serverDef: { a: {}, b: {} },
 };
 
 const el = {
@@ -106,11 +121,49 @@ function startNewSession() {
   state.turnOrder = 0;
 }
 
+function hydratePlatformContext() {
+  const params = new URLSearchParams(window.location.search);
+  state.workspaceId = sanitizeEntityId(params.get("workspaceId"), DEFAULT_WORKSPACE_ID);
+  state.projectId = sanitizeEntityId(params.get("projectId"), DEFAULT_PROJECT_ID);
+  state.experimentId = sanitizeEntityId(params.get("experimentId"));
+  state.linkedRunId = sanitizeEntityId(params.get("linkedRunId") || params.get("runId"));
+  state.reportId = sanitizeEntityId(params.get("reportId"));
+  state.requestedSessionId = sanitizeEntityId(params.get("sessionId"));
+}
+
+function applySessionPlatformContext(session) {
+  if (!session || typeof session !== "object") return;
+  state.workspaceId = sanitizeEntityId(session.workspaceId, state.workspaceId || DEFAULT_WORKSPACE_ID);
+  state.projectId = sanitizeEntityId(session.projectId, state.projectId || DEFAULT_PROJECT_ID);
+  state.experimentId = sanitizeEntityId(session.experimentId, state.experimentId);
+  state.linkedRunId = sanitizeEntityId(session.linkedRunId || session.runId, state.linkedRunId);
+  state.reportId = sanitizeEntityId(session.reportId, state.reportId);
+}
+
+function buildScopedApiUrl(baseUrl, extraParams = {}) {
+  const url = new URL(baseUrl, window.location.origin);
+  url.searchParams.set("workspaceId", state.workspaceId || DEFAULT_WORKSPACE_ID);
+  url.searchParams.set("projectId", state.projectId || DEFAULT_PROJECT_ID);
+  if (state.experimentId) url.searchParams.set("experimentId", state.experimentId);
+  if (state.linkedRunId) url.searchParams.set("linkedRunId", state.linkedRunId);
+  if (state.reportId) url.searchParams.set("reportId", state.reportId);
+  for (const [key, value] of Object.entries(extraParams)) {
+    if (value == null || value === "") continue;
+    url.searchParams.set(key, String(value));
+  }
+  return `${url.pathname}${url.search}`;
+}
+
 function buildSessionPayload() {
   const config = readConfigFromInputs();
   const role = getSelectedRole();
   return {
     id: state.sessionId,
+    workspaceId: state.workspaceId,
+    projectId: state.projectId,
+    experimentId: state.experimentId,
+    linkedRunId: state.linkedRunId,
+    reportId: state.reportId,
     createdAt: state.sessionCreatedAt || Date.now(),
     updatedAt: Date.now(),
     roleId: role ? role.id : "",
@@ -138,7 +191,7 @@ async function persistSession() {
   try {
     const session = buildSessionPayload();
     sessionStorage.setItem(LS_KEY_SESSION, state.sessionId);
-    await fetch(SESSIONS_API_ENDPOINT, {
+    await fetch(buildScopedApiUrl(SESSIONS_API_ENDPOINT), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session }),
@@ -148,7 +201,10 @@ async function persistSession() {
   }
 }
 
-function restoreSession(session) {
+function restoreSession(session, options = {}) {
+  const { statusText = "已恢复对话，可继续输入。" } = options;
+
+  applySessionPlatformContext(session);
   state.sessionId = session.id;
   state.sessionCreatedAt = session.createdAt || Date.now();
   state.turnOrder = session.turnCount || 0;
@@ -165,7 +221,22 @@ function restoreSession(session) {
   renderTimeline();
   renderComparePanel();
   setBusy(false);
-  setStatus("已恢复对话，可继续输入。", "ok");
+  setStatus(statusText, "ok");
+}
+
+async function restoreRemoteSession(sessionId, options = {}) {
+  if (!sessionId) return false;
+
+  try {
+    const res = await fetch(buildScopedApiUrl(SESSIONS_API_ENDPOINT, { id: sessionId }));
+    const data = await res.json();
+    if (!data.session) return false;
+    restoreSession(data.session, options);
+    return true;
+  } catch (error) {
+    console.warn(`Failed to restore session ${sessionId}:`, error);
+    return false;
+  }
 }
 
 function clampTemperature(value) {
@@ -261,7 +332,7 @@ async function openHistoryPanel() {
   setHistoryOpen(true);
   el.historyList.innerHTML = `<p class="history-empty">加载中...</p>`;
   try {
-    const res = await fetch(`${SESSIONS_API_ENDPOINT}?limit=200&deviceId=${encodeURIComponent(getDeviceId())}`);
+    const res = await fetch(buildScopedApiUrl(SESSIONS_API_ENDPOINT, { limit: 200, deviceId: getDeviceId() }));
     const data = await res.json();
     const sessions = Array.isArray(data.sessions) ? data.sessions : [];
     renderHistoryList(sessions);
@@ -281,12 +352,14 @@ function renderHistoryList(sessions) {
     item.className = "history-item";
     const firstMsg = s.messages?.find((m) => m.role === "user" && m.type !== "compare");
     const preview = firstMsg ? shortText(firstMsg.content, 60) : "（空对话）";
+    const scope = [s.projectId, s.experimentId].filter(Boolean).map((value) => shortText(value, 16)).join(" / ");
     item.innerHTML = `
       <div class="history-item-title">${escapeHtml(s.roleName || "未知角色")}</div>
       <div class="history-item-meta">
         <span>${formatDate(s.createdAt)}</span>
         <span>${s.turnCount} 轮</span>
         <span>${escapeHtml(s.config?.modelA || "")} vs ${escapeHtml(s.config?.modelB || "")}</span>
+        ${scope ? `<span>${escapeHtml(scope)}</span>` : ""}
       </div>
       <div class="history-item-preview">${escapeHtml(preview)}</div>
     `;
@@ -332,8 +405,8 @@ async function openSessionDetail(sessionId) {
   try {
     // Fetch session + its turn records
     const [sessionRes, recordsRes] = await Promise.all([
-      fetch(`${SESSIONS_API_ENDPOINT}?id=${encodeURIComponent(sessionId)}`),
-      fetch(`${RECORDS_API_ENDPOINT}?limit=2000`),
+      fetch(buildScopedApiUrl(SESSIONS_API_ENDPOINT, { id: sessionId })),
+      fetch(buildScopedApiUrl(RECORDS_API_ENDPOINT, { limit: 2000 })),
     ]);
     const sessionData = await sessionRes.json();
     const recordsData = await recordsRes.json();
@@ -347,10 +420,16 @@ async function openSessionDetail(sessionId) {
       .sort((a, b) => a.turnOrder - b.turnOrder);
 
     el.sessionModalTitle.textContent = `${session.roleName || "未知角色"} · ${formatDate(session.createdAt)}`;
+    const scopeParts = [
+      session.projectId ? `Project: ${session.projectId}` : "",
+      session.experimentId ? `Experiment: ${session.experimentId}` : "",
+      session.linkedRunId ? `Run: ${session.linkedRunId}` : "",
+    ].filter(Boolean);
     el.sessionModalMeta.textContent =
       `模型 A: ${session.config?.modelA || "?"} (${session.config?.endpointHostA || "?"})  ·  ` +
       `模型 B: ${session.config?.modelB || "?"} (${session.config?.endpointHostB || "?"})  ·  ` +
-      `Temperature: ${session.temperature ?? 0}  ·  共 ${session.turnCount} 轮`;
+      `Temperature: ${session.temperature ?? 0}  ·  共 ${session.turnCount} 轮` +
+      (scopeParts.length ? `  ·  ${scopeParts.join("  ·  ")}` : "");
 
     renderSessionDetail(session, turnRecords);
   } catch (e) {
@@ -497,6 +576,12 @@ function persistConfig() {
     ...config,
     apiKeyA: config.rememberKeys ? config.apiKeyA : "",
     apiKeyB: config.rememberKeys ? config.apiKeyB : "",
+    // 记录本次服务端默认值及 hash，下次加载时用来判断管理员是否更新过配置
+    _sdHash: state.serverDef?.hash || "",
+    _sdEndpointA: state.serverDef?.a?.endpoint || "",
+    _sdEndpointB: state.serverDef?.b?.endpoint || "",
+    _sdModelA: state.serverDef?.a?.model || "",
+    _sdModelB: state.serverDef?.b?.model || "",
   };
   localStorage.setItem(LS_KEY_CONFIG, JSON.stringify(payload));
 }
@@ -511,15 +596,27 @@ function hydrateConfig(serverDef = { a: {}, b: {} }) {
     }
   } catch { saved = {}; }
 
-  // 如果 saved 里的 endpoint 是旧的内置默认值，视为未主动设置，让服务端默认值覆盖
-  const LEGACY_DEFAULTS = [
+  // 如果服务端配置的 hash 与上次存档不同（或存档里没有 hash），
+  // 说明管理员更新了默认配置，endpoint/model 一律跟随服务端新值。
+  // 只有 hash 相同时，才保留用户自己主动改过的值。
+  const serverHashChanged = !saved._sdHash || saved._sdHash !== serverDef.hash;
+
+  const LEGACY_ENDPOINT_DEFAULTS = [
     "https://openrouter.ai/api/v1/chat/completions",
     "https://api.openai.com/v1/chat/completions",
   ];
-  const userEndpointA = LEGACY_DEFAULTS.includes(saved.endpointA) ? "" : saved.endpointA;
-  const userEndpointB = LEGACY_DEFAULTS.includes(saved.endpointB) ? "" : saved.endpointB;
-  const userModelA = (saved.modelA === "openai/gpt-4o-mini" || saved.modelA === "gpt-4o-mini") ? "" : saved.modelA;
-  const userModelB = (saved.modelB === "openai/gpt-4o-mini" || saved.modelB === "gpt-4o-mini") ? "" : saved.modelB;
+  const LEGACY_MODEL_DEFAULTS = ["openai/gpt-4o-mini", "gpt-4o-mini"];
+  // 用户主动设置 = hash 没变 且 值非空 且 不是旧硬编码默认 且 不等于上次服务端默认
+  const isUserSet = (val, legacyList, prevServerDefault) =>
+    !serverHashChanged &&
+    !!val &&
+    !legacyList.includes(val) &&
+    val !== (prevServerDefault || "");
+
+  const userEndpointA = isUserSet(saved.endpointA, LEGACY_ENDPOINT_DEFAULTS, saved._sdEndpointA) ? saved.endpointA : "";
+  const userEndpointB = isUserSet(saved.endpointB, LEGACY_ENDPOINT_DEFAULTS, saved._sdEndpointB) ? saved.endpointB : "";
+  const userModelA    = isUserSet(saved.modelA,    LEGACY_MODEL_DEFAULTS,    saved._sdModelA)    ? saved.modelA    : "";
+  const userModelB    = isUserSet(saved.modelB,    LEGACY_MODEL_DEFAULTS,    saved._sdModelB)    ? saved.modelB    : "";
 
   // 优先级：用户 localStorage > 服务端默认 > 代码内置 DEFAULT_CONFIG
   const config = {
@@ -788,7 +885,7 @@ function buildSummary(items) {
 }
 
 async function appendRecord(item) {
-  const payload = await requestRecordsApi(RECORDS_API_ENDPOINT, {
+  const payload = await requestRecordsApi(buildScopedApiUrl(RECORDS_API_ENDPOINT), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ item }),
@@ -797,7 +894,7 @@ async function appendRecord(item) {
 }
 
 async function fetchRecords(limit = MAX_STATS_RECORDS) {
-  const payload = await requestRecordsApi(`${RECORDS_API_ENDPOINT}?limit=${encodeURIComponent(limit)}`, { method: "GET" });
+  const payload = await requestRecordsApi(buildScopedApiUrl(RECORDS_API_ENDPOINT, { limit }), { method: "GET" });
   const items = Array.isArray(payload?.items) ? payload.items : [];
   const summary = payload?.summary && typeof payload.summary === "object" ? payload.summary : buildSummary(items);
   return { items, summary, storage: payload?.storage || "server" };
@@ -1086,6 +1183,11 @@ function buildTurnRecord(action, selected = "") {
   const systemPrompt = buildRoleSystemPrompt(role);
   return {
     id: createId("rec"),
+    workspaceId: state.workspaceId,
+    projectId: state.projectId,
+    experimentId: state.experimentId,
+    linkedRunId: state.linkedRunId,
+    reportId: state.reportId,
     createdAt: Date.now(),
     action,
     sessionId: state.sessionId,
@@ -1344,6 +1446,7 @@ async function loadRoles() {
 }
 
 async function init() {
+  hydratePlatformContext();
   startNewSession();
   setBusy(true);
   setStatus("初始化中...", "warn");
@@ -1358,6 +1461,7 @@ async function init() {
       if (defRes.ok) {
         const def = await defRes.json();
         serverDef = def;
+        state.serverDef = def;
         state.serverDefaultKeys = { a: !!def.a?.hasKey, b: !!def.b?.hasKey };
       }
     } catch { /* 拉不到默认配置不影响正常使用 */ }
@@ -1371,26 +1475,22 @@ async function init() {
     await refreshStats({ silent: true });
     persistConfig();
 
-    // 尝试恢复本标签页上次对话（sessionStorage，不跨标签页）
+    // 优先恢复主平台带过来的 sessionId，其次再恢复本标签页上次对话。
     const lastSessionId = sessionStorage.getItem(LS_KEY_SESSION);
     let restored = false;
-    if (lastSessionId) {
-      try {
-        const res = await fetch(`${SESSIONS_API_ENDPOINT}?id=${encodeURIComponent(lastSessionId)}`);
-        const data = await res.json();
-        if (data.session && Array.isArray(data.session.messages) && data.session.messages.length) {
-          restoreSession(data.session);
-          restored = true;
-        }
-      } catch (e) {
-        console.warn("Failed to restore last session:", e);
-      }
+
+    if (state.requestedSessionId) {
+      restored = await restoreRemoteSession(state.requestedSessionId, { statusText: "已恢复主平台关联会话，可继续输入。" });
+    }
+
+    if (!restored && lastSessionId && lastSessionId !== state.requestedSessionId) {
+      restored = await restoreRemoteSession(lastSessionId, { statusText: "已恢复上次对话，可继续输入。" });
     }
 
     const cfg = readConfigFromInputs();
     // 只有用户没填 key 且服务端也没有默认 key 时才弹出设置面板
     if ((!cfg.apiKeyA && !state.serverDefaultKeys.a) || (!cfg.apiKeyB && !state.serverDefaultKeys.b)) setSettingsOpen(true);
-    if (!restored) setStatus("就绪。", "ok");
+    if (!restored) setStatus(`就绪。当前 Project: ${state.projectId}${state.experimentId ? ` · Experiment: ${state.experimentId}` : ""}`, "ok");
   } catch (error) {
     console.error("Init failed:", error);
     state.storageReady = false;

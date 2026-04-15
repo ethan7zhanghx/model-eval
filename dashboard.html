@@ -192,9 +192,16 @@
   </div>
 
   <script>
-    const EVAL_API = "/api/eval-results";
+    const EVAL_API = "/api/runs";
+    const selectedRunId = new URLSearchParams(window.location.search).get("runId");
 
     let allResults = [];
+
+    function getVisibleResults() {
+      if (!selectedRunId) return allResults;
+      const matched = allResults.filter((item) => item.id === selectedRunId);
+      return matched.length ? matched : allResults;
+    }
 
     async function loadData() {
       try {
@@ -202,8 +209,12 @@
         const payload = await resp.json();
         allResults = Array.isArray(payload.items) ? payload.items : [];
         render();
+        const visibleResults = getVisibleResults();
+        const scopeText = selectedRunId && visibleResults.length === 1 && visibleResults[0]?.id === selectedRunId
+          ? `当前查看 Run ${selectedRunId}`
+          : `共 ${payload.total ?? allResults.length} 条记录`;
         document.getElementById("lastUpdated").textContent =
-          `共 ${payload.total ?? allResults.length} 条记录 · 更新于 ${new Date().toLocaleTimeString("zh-CN")}`;
+          `${scopeText} · 更新于 ${new Date().toLocaleTimeString("zh-CN")}`;
       } catch (e) {
         document.getElementById("lastUpdated").textContent = "加载失败：" + e.message;
       }
@@ -279,12 +290,13 @@
     }
 
     function render() {
-      const modelStats = aggregateByModel(allResults);
+      const visibleResults = getVisibleResults();
+      const modelStats = aggregateByModel(visibleResults);
 
       // KPIs
-      const totalCases = allResults.reduce((s, r) => s + (r.rows?.length || 0), 0);
+      const totalCases = visibleResults.reduce((s, r) => s + (r.rows?.length || 0), 0);
       const uniqueModels = new Set(modelStats.map((m) => m.modelId)).size;
-      const scoredCases = allResults.reduce((s, run) => {
+      const scoredCases = visibleResults.reduce((s, run) => {
         for (const row of (run.rows || [])) {
           for (const r of Object.values(row.results || {})) {
             if (r.manualScore != null || r.judgeScore != null || r.ruleScore != null) { s++; break; }
@@ -297,7 +309,7 @@
       const globalAvgLatency = allLatencies.length ? Math.round(allLatencies.reduce((a, b) => a + b, 0) / allLatencies.length) : null;
       const globalAvgTps = allTps.length ? +(allTps.reduce((a, b) => a + b, 0) / allTps.length).toFixed(1) : null;
 
-      document.getElementById("kpiRuns").textContent = allResults.length;
+      document.getElementById("kpiRuns").textContent = visibleResults.length;
       document.getElementById("kpiCases").textContent = totalCases;
       document.getElementById("kpiModels").textContent = uniqueModels;
       document.getElementById("kpiScored").textContent = scoredCases;
@@ -353,13 +365,15 @@
           const rowCount = run.rows?.length || 0;
           const scoreMethod = { none: "不评分", exact: "精确匹配", judge: "LLM Judge" }[run.config?.scoreMethod] || run.config?.scoreMethod;
           const time = new Date(run.savedAt).toLocaleString("zh-CN", { hour12: false });
-          return `<div class="run-item">
+          const isSelected = selectedRunId && selectedRunId === run.id;
+          return `<div class="run-item" ${isSelected ? 'style="border-color:var(--accent);box-shadow:var(--shadow-sm);background:var(--accent-light)"' : ''}>
             <div>
-              <div class="run-title">${time}</div>
-              <div class="run-meta">${rowCount} 条用例 · ${run.config?.models?.length || 0} 个模型 · 评分：${scoreMethod} · T=${run.config?.temperature ?? 0}</div>
+              <div class="run-title">${time}${isSelected ? ' · 当前查看' : ''}</div>
+              <div class="run-meta">${rowCount} 条用例 · ${run.config?.models?.length || 0} 个模型 · 状态：${run.status || 'completed'} · 评分：${scoreMethod} · T=${run.config?.temperature ?? 0}</div>
               <div class="run-meta" style="margin-top:2px;font-family:ui-monospace,monospace;font-size:.72rem">${models}</div>
             </div>
             <div class="run-actions">
+              ${run.experimentId ? `<a class="small-btn" href="./experiment.html?experimentId=${encodeURIComponent(run.experimentId)}&runId=${encodeURIComponent(run.id)}">打开实验</a>` : ''}
               <button class="small-btn" onclick="deleteRun('${run.id}')">删除</button>
             </div>
           </div>`;

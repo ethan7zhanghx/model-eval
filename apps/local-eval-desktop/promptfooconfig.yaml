@@ -1,0 +1,30 @@
+description: Local Eval Desktop smoke
+prompts:
+  - label: default
+    prompt: |
+      你是一个帮助我们测试模型表现的助手，请用中文简洁回答用户问题。
+      {{input}}
+providers:
+  - id: openrouter:openai/gpt-4o-mini
+    config:
+      apiKeyEnvar: OPENROUTER_API_KEY
+  - id: openai:gpt-4.1-mini
+    config:
+      apiKeyEnvar: OPENAI_API_KEY
+      apiBaseUrl: ${OPENAI_COMPAT_BASE_URL:https://api.openai.com/v1}
+tests:
+  - vars:
+      input: "你好，简单介绍你自己"
+      expected: "你好"
+    assert:
+      - type: contains
+        value: "你好"
+  - vars:
+      input: "2+2=?"
+      expected: "4"
+    assert:
+      - type: exact
+        value: "4"
+settings:
+  cache: false
+  telemetryEnabled: false

@@ -21,7 +21,7 @@
       </div>
       <div class="header-actions">
         <a href="./index.html" class="ghost-btn action-link">工作台</a>
-        <a href="./zhumengdao/" class="ghost-btn action-link">场景评测</a>
+        <a id="openScenarioWorkbenchLink" href="./zhumengdao/" class="ghost-btn action-link">场景评测</a>
         <a href="./dashboard.html" class="ghost-btn action-link">数据看板</a>
         <button id="saveConfigBtn" class="ghost-btn">保存草稿</button>
         <button id="runWorkflowBtn" class="primary">▶ 启动运行</button>
@@ -40,6 +40,29 @@
             <span class="overview-status-label">当前状态</span>
             <p id="statusBar" class="status">等待开始：请选择模型、填写 Prompt，或从历史草稿继续。</p>
           </div>
+        </div>
+
+        <div class="entity-state-grid" aria-label="当前对象状态">
+          <article class="entity-state-card">
+            <span class="entity-state-label">当前实验</span>
+            <strong id="currentExperimentTitle" class="entity-state-value">未保存</strong>
+            <span id="currentExperimentMeta" class="entity-state-meta">新建实验</span>
+          </article>
+          <article class="entity-state-card">
+            <span class="entity-state-label">实验状态</span>
+            <strong id="currentExperimentStatus" class="entity-state-value">草稿中</strong>
+            <span id="currentExperimentUpdatedAt" class="entity-state-meta">尚未保存</span>
+          </article>
+          <article class="entity-state-card">
+            <span class="entity-state-label">最近运行</span>
+            <strong id="currentRunLabel" class="entity-state-value">未运行</strong>
+            <span id="currentRunMeta" class="entity-state-meta">保存并启动后生成</span>
+          </article>
+          <article class="entity-state-card entity-state-card-highlight">
+            <span class="entity-state-label">运行状态</span>
+            <strong id="currentRunStatus" class="entity-state-value">待执行</strong>
+            <span id="currentRunUpdatedAt" class="entity-state-meta">暂无运行记录</span>
+          </article>
         </div>
 
         <div class="summary-grid" aria-label="当前实验摘要">
@@ -85,6 +108,7 @@
               <a class="section-link" href="#section-models">参与模型</a>
               <a class="section-link" href="#section-scoring">评分策略</a>
               <a class="section-link" href="#section-history">历史草稿</a>
+              <a class="section-link" href="#section-scenario-archive">场景归档</a>
               <a class="section-link" href="#section-cases">样本工作区</a>
             </nav>
           </section>
@@ -111,6 +135,25 @@
               </label>
 
               <label>
+                <span>评测类型</span>
+                <select id="evalTypeSelect">
+                  <option value="single_turn">单轮样本评测</option>
+                  <option value="multi_turn">多轮对话评测</option>
+                  <option value="scenario">场景模拟（归档 / 跳转）</option>
+                </select>
+              </label>
+
+              <label>
+                <span>输入来源</span>
+                <select id="sourceTypeSelect">
+                  <option value="manual_prompt">手动输入</option>
+                  <option value="prompt_file">文本导入（md / txt）</option>
+                  <option value="dataset_import">数据集导入</option>
+                  <option value="scenario_session">场景工作台归档</option>
+                </select>
+              </label>
+
+              <label>
                 <span>Temperature</span>
                 <input id="temperatureInput" type="number" value="0" min="0" max="2" step="0.1">
               </label>
@@ -129,6 +172,7 @@
                 <span>System Prompt</span>
                 <textarea id="systemPromptInput" rows="4" placeholder="输入本次实验共用的 System Prompt"></textarea>
               </label>
+              <p id="evalModeHint" class="hint full-span">单轮样本评测会把每一行视为独立样本；多轮对话评测会按行串联上下文。</p>
             </div>
             <div class="cost-estimate-row sidebar-cost-row">
               <label class="cost-estimate-input">
@@ -196,6 +240,21 @@
               <button id="clearHistoryBtn" class="ghost-btn">清空</button>
             </div>
             <div id="historyList" class="history-list"></div>
+          </section>
+
+          <section class="panel history-panel" id="section-scenario-archive">
+            <div class="panel-head panel-head-compact">
+              <div>
+                <p class="panel-kicker">Scenario</p>
+                <h2><span class="panel-icon">🎭</span>关联场景评测</h2>
+              </div>
+              <div class="actions-inline">
+                <a id="openScenarioArchiveLink" href="./zhumengdao/" class="ghost-btn action-link">打开工作台</a>
+                <button id="refreshScenarioSessionsBtn" class="ghost-btn" type="button">刷新</button>
+              </div>
+            </div>
+            <p class="hint">显示当前 Project / Experiment 下的场景评测 session，便于统一归档与后续报告引用。</p>
+            <div id="scenarioSessionsList" class="history-list"></div>
           </section>
         </aside>
 

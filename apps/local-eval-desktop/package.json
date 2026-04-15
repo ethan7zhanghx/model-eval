@@ -1,0 +1,13 @@
+{
+  "name": "local-eval-desktop",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "eval": "node ./scripts/run-eval.mjs",
+    "view": "npx --yes promptfoo@latest view --config ./promptfooconfig.yaml"
+  },
+  "dependencies": {
+    "execa": "^9.3.1"
+  }
+}
