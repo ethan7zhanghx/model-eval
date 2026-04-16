@@ -522,7 +522,7 @@ function buildRoleSystemPrompt(role) {
     role.identity ? `身份：${role.identity}` : "",
     role.persona ? `人物设定：${role.persona}` : "",
     role.opening ? `开场白参考：${role.opening}` : "",
-    "请始终保持角色语气，并与用户持续对话。",
+    "你正在一个角色扮演对话 App 中与用户互动。请始终保持角色语气和人设，每次回复只需包含一两轮的动作描写加对话，简练自然，符合即时聊天节奏。",
   ].filter(Boolean).join("\n");
 }
 
