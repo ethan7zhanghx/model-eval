@@ -256,6 +256,7 @@
           <p class="dialog-meta" id="dialogMeta"></p>
         </div>
         <div class="dialog-actions">
+          <button class="ghost-btn" id="dialogExportBtn" type="button">导出此对话</button>
           <button class="ghost-btn hidden" id="dialogArchiveBtn" type="button">归档</button>
           <button class="close-btn" id="dialogClose" aria-label="关闭">✕</button>
         </div>
@@ -1064,6 +1065,18 @@
     document.getElementById("adminLoginBtn").addEventListener("click", tryLogin);
     document.getElementById("adminPasswordInput").addEventListener("keydown", e => {
       if (e.key === "Enter") tryLogin();
+    });
+    document.getElementById("dialogExportBtn").addEventListener("click", () => {
+      if (!currentDialogSessionId) return;
+      const session = getSessionById(currentDialogSessionId);
+      const records = getSessionRecords(currentDialogSessionId);
+      const payload = { session: session || { id: currentDialogSessionId }, records, exportedAt: Date.now() };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const name = (session?.roleName || "session").replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, "_");
+      a.href = url; a.download = `zhumengdao-${name}-${currentDialogSessionId}.json`; a.click();
+      URL.revokeObjectURL(url);
     });
     document.getElementById("dialogArchiveBtn").addEventListener("click", async () => {
       if (currentDialogSessionId) await toggleArchiveSession(currentDialogSessionId);
