@@ -120,10 +120,28 @@
 
     .dialog-body .msg { max-width: min(80%, 640px); }
 
+    /* Filter bar */
+    .filter-bar { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: 14px 18px; box-shadow: var(--shadow-sm); }
+    .filter-bar-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .filter-bar-title { font-size: .85rem; font-weight: 700; color: var(--text-soft); text-transform: uppercase; letter-spacing: .04em; }
+    .filter-bar-actions { display: flex; gap: 8px; align-items: center; }
+    .filter-bar-hint { font-size: .75rem; color: var(--accent); font-weight: 600; display: none; }
+    .filter-bar-hint.active { display: inline; }
+    .filter-controls { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+    .filter-item { display: flex; flex-direction: column; gap: 4px; font-size: .78rem; color: var(--text-soft); font-weight: 500; }
+    .filter-item input, .filter-item select { font: inherit; font-size: .82rem; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; color: var(--text); outline: none; transition: border-color .15s; }
+    .filter-item input:focus, .filter-item select:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+    .filter-item input[type="date"] { min-width: 145px; }
+    .filter-item select { min-width: 140px; max-width: 220px; }
+    .clear-filters-btn { font: inherit; font-size: .78rem; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-soft); cursor: pointer; transition: background .12s, color .12s; white-space: nowrap; }
+    .clear-filters-btn:hover { background: #f7f9fd; color: var(--text); }
+
     @media (max-width: 700px) {
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
       .turn-compare-grid { grid-template-columns: 1fr; }
       .model-name { min-width: 100px; max-width: 140px; }
+      .filter-controls { gap: 8px; }
+      .filter-item select, .filter-item input[type="date"] { min-width: 120px; }
     }
   </style>
 </head>
@@ -143,6 +161,38 @@
         <button id="exportBtn" class="ghost-btn">导出 JSON</button>
       </div>
     </header>
+
+    <div class="filter-bar">
+      <div class="filter-bar-head">
+        <span class="filter-bar-title">全局筛选</span>
+        <div class="filter-bar-actions">
+          <span class="filter-bar-hint" id="filterHint">筛选已生效</span>
+          <button class="clear-filters-btn" id="clearFiltersBtn" type="button">清除筛选</button>
+        </div>
+      </div>
+      <div class="filter-controls">
+        <label class="filter-item">
+          <span>开始日期</span>
+          <input type="date" id="globalDateFrom">
+        </label>
+        <label class="filter-item">
+          <span>结束日期</span>
+          <input type="date" id="globalDateTo">
+        </label>
+        <label class="filter-item">
+          <span>角色</span>
+          <select id="globalRole"><option value="">全部角色</option></select>
+        </label>
+        <label class="filter-item">
+          <span>模型 1</span>
+          <select id="globalModel1"><option value="">全部模型</option></select>
+        </label>
+        <label class="filter-item">
+          <span>模型 2</span>
+          <select id="globalModel2"><option value="">全部模型</option></select>
+        </label>
+      </div>
+    </div>
 
     <div class="kpi-grid">
       <div class="kpi-card"><div class="kpi-label">总轮次</div><div class="kpi-value" id="kpiTotal">—</div></div>
@@ -176,9 +226,6 @@
       <div class="section-head">
         <h2>对话记录</h2>
         <div class="toolbar">
-          <select class="filter-select" id="filterRole">
-            <option value="">全部角色</option>
-          </select>
           <select class="filter-select" id="filterArchive">
             <option value="active">未归档</option>
             <option value="all">全部</option>
@@ -225,6 +272,111 @@
     let allSessions = [];
     let currentDialogSessionId = "";
     let isArchiveSaving = false;
+
+    // ── Global filter state ──────────────────────────────────
+    let gFilterDateFrom = "";
+    let gFilterDateTo = "";
+    let gFilterRole = "";
+    let gFilterModel1 = "";
+    let gFilterModel2 = "";
+
+    function getAllModels() {
+      const models = new Set();
+      for (const r of allRecords) {
+        if (r.apiA?.model) models.add(r.apiA.model);
+        if (r.apiB?.model) models.add(r.apiB.model);
+      }
+      return [...models].sort();
+    }
+    function getAllRoles() {
+      return [...new Set(allSessions.map(s => s.roleName).filter(Boolean))].sort();
+    }
+    function readGlobalFilters() {
+      gFilterDateFrom = document.getElementById("globalDateFrom").value || "";
+      gFilterDateTo = document.getElementById("globalDateTo").value || "";
+      gFilterRole = document.getElementById("globalRole").value || "";
+      gFilterModel1 = document.getElementById("globalModel1").value || "";
+      gFilterModel2 = document.getElementById("globalModel2").value || "";
+    }
+    function hasActiveFilters() {
+      return !!(gFilterDateFrom || gFilterDateTo || gFilterRole || gFilterModel1 || gFilterModel2);
+    }
+    function updateFilterHint() {
+      const el = document.getElementById("filterHint");
+      if (el) el.classList.toggle("active", hasActiveFilters());
+    }
+    function getGlobalFilteredData() {
+      let sessions = allSessions.slice();
+      const hasSessionFilter = gFilterDateFrom || gFilterDateTo || gFilterRole;
+
+      if (gFilterDateFrom) {
+        const from = new Date(gFilterDateFrom + "T00:00:00").getTime();
+        sessions = sessions.filter(s => s.createdAt >= from);
+      }
+      if (gFilterDateTo) {
+        const to = new Date(gFilterDateTo + "T23:59:59.999").getTime();
+        sessions = sessions.filter(s => s.createdAt <= to);
+      }
+      if (gFilterRole) {
+        sessions = sessions.filter(s => s.roleName === gFilterRole);
+      }
+
+      const validSessionIds = new Set(sessions.map(s => s.id).filter(Boolean));
+
+      let records = allRecords.filter(r => {
+        if (!r.sessionId) return !hasSessionFilter;
+        return validSessionIds.has(r.sessionId);
+      });
+
+      // Model filter
+      if (gFilterModel1 && gFilterModel2) {
+        records = records.filter(r => {
+          const mA = r.apiA?.model;
+          const mB = r.apiB?.model;
+          return (mA === gFilterModel1 && mB === gFilterModel2) ||
+                 (mA === gFilterModel2 && mB === gFilterModel1);
+        });
+      } else if (gFilterModel1) {
+        records = records.filter(r => {
+          return r.apiA?.model === gFilterModel1 || r.apiB?.model === gFilterModel1;
+        });
+      }
+
+      // When model filter is active, also limit sessions to those with matching records
+      if (gFilterModel1) {
+        const sessionIdsWithRecords = new Set(records.map(r => r.sessionId).filter(Boolean));
+        sessions = sessions.filter(s => sessionIdsWithRecords.has(s.id));
+      }
+
+      return { records, sessions };
+    }
+    function populateGlobalFilters() {
+      const roleSelect = document.getElementById("globalRole");
+      const model1Select = document.getElementById("globalModel1");
+      const model2Select = document.getElementById("globalModel2");
+      const curRole = roleSelect.value;
+      const curM1 = model1Select.value;
+      const curM2 = model2Select.value;
+
+      const roles = getAllRoles();
+      roleSelect.innerHTML = '<option value="">全部角色</option>' +
+        roles.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join("");
+      if (roles.includes(curRole)) roleSelect.value = curRole;
+
+      const models = getAllModels();
+      const modelOpts = '<option value="">全部模型</option>' +
+        models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+      model1Select.innerHTML = modelOpts;
+      model2Select.innerHTML = modelOpts;
+      if (models.includes(curM1)) model1Select.value = curM1;
+      if (models.includes(curM2)) model2Select.value = curM2;
+    }
+    function applyGlobalFilters() {
+      readGlobalFilters();
+      updateFilterHint();
+      renderStatsPanels();
+      if (isAuthed) renderSessionsSection();
+    }
 
     function esc(str) {
       return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -277,11 +429,12 @@
         .sort((a, b) => a.turnOrder - b.turnOrder);
     }
     function getStatsRecords() {
+      const { records, sessions } = getGlobalFilteredData();
       const archivedSessionIds = new Set(
-        allSessions.filter(isArchivedSession).map((session) => session.id).filter(Boolean)
+        sessions.filter(isArchivedSession).map((session) => session.id).filter(Boolean)
       );
-      if (!archivedSessionIds.size) return allRecords.slice();
-      return allRecords.filter((record) => !record.sessionId || !archivedSessionIds.has(record.sessionId));
+      if (!archivedSessionIds.size) return records;
+      return records.filter((record) => !record.sessionId || !archivedSessionIds.has(record.sessionId));
     }
     async function requestJson(url, options) {
       const res = await fetch(url, options);
@@ -555,14 +708,15 @@
 
     // ── 对话列表 ──────────────────────────────────────────
     function buildSessionSummaries() {
+      const { records: filteredRecords, sessions: filteredSessions } = getGlobalFilteredData();
       const bySession = new Map();
-      for (const record of allRecords) {
+      for (const record of filteredRecords) {
         if (!record.sessionId) continue;
         if (!bySession.has(record.sessionId)) bySession.set(record.sessionId, []);
         bySession.get(record.sessionId).push(record);
       }
 
-      return allSessions.map((session) => {
+      return filteredSessions.map((session) => {
         const recs = (bySession.get(session.id) || []).sort((a, b) => a.turnOrder - b.turnOrder);
         const firstUser = recs[0]?.userText || "";
         const voteRecs = recs.filter((record) => record.action === "vote");
@@ -633,30 +787,11 @@
       }
     }
 
-    function populateRoleFilter(summaries) {
-      const status = getArchiveFilterValue();
-      const sel = document.getElementById("filterRole");
-      const current = sel.value;
-      const roles = [...new Set(
-        summaries
-          .filter((item) => matchesArchiveFilter(item.session, status))
-          .map((item) => item.session.roleName)
-          .filter(Boolean)
-      )];
-      sel.innerHTML = `<option value="">全部角色</option>` +
-        roles.map((role) => `<option value="${esc(role)}">${esc(role)}</option>`).join("");
-      sel.value = roles.includes(current) ? current : "";
-    }
-
     function renderSessionsSection() {
       const summaries = buildSessionSummaries();
-      populateRoleFilter(summaries);
-
-      const role = document.getElementById("filterRole").value;
       const status = getArchiveFilterValue();
       const filtered = summaries
-        .filter((item) => matchesArchiveFilter(item.session, status))
-        .filter((item) => !role || item.session.roleName === role);
+        .filter((item) => matchesArchiveFilter(item.session, status));
 
       renderSessionsHint(summaries, filtered);
       renderSessionsList(filtered);
@@ -874,6 +1009,9 @@
         allSessions = Array.isArray(sesData.sessions) ? sesData.sessions : [];
         allSessions.sort((a, b) => b.createdAt - a.createdAt);
 
+        populateGlobalFilters();
+        readGlobalFilters();
+        updateFilterHint();
         renderStatsPanels();
 
         document.getElementById("lastUpdated").textContent =
@@ -893,9 +1031,13 @@
 
     async function exportRecords() {
       try {
-        const res = await fetch(`${RECORDS_API}?limit=2000`);
-        const data = await res.json();
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        readGlobalFilters();
+        const { records } = getGlobalFilteredData();
+        const filters = { dateFrom: gFilterDateFrom, dateTo: gFilterDateTo, role: gFilterRole, model1: gFilterModel1, model2: gFilterModel2 };
+        const hasFilters = Object.values(filters).some(Boolean);
+        const payload = { items: records, exportedAt: Date.now() };
+        if (hasFilters) payload.filters = filters;
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url; a.download = `zhumengdao-records-${Date.now()}.json`; a.click();
@@ -905,8 +1047,20 @@
 
     document.getElementById("refreshBtn").addEventListener("click", load);
     document.getElementById("exportBtn").addEventListener("click", exportRecords);
-    document.getElementById("filterRole").addEventListener("change", applyFilters);
     document.getElementById("filterArchive").addEventListener("change", applyFilters);
+    document.getElementById("globalDateFrom").addEventListener("change", applyGlobalFilters);
+    document.getElementById("globalDateTo").addEventListener("change", applyGlobalFilters);
+    document.getElementById("globalRole").addEventListener("change", applyGlobalFilters);
+    document.getElementById("globalModel1").addEventListener("change", applyGlobalFilters);
+    document.getElementById("globalModel2").addEventListener("change", applyGlobalFilters);
+    document.getElementById("clearFiltersBtn").addEventListener("click", () => {
+      document.getElementById("globalDateFrom").value = "";
+      document.getElementById("globalDateTo").value = "";
+      document.getElementById("globalRole").value = "";
+      document.getElementById("globalModel1").value = "";
+      document.getElementById("globalModel2").value = "";
+      applyGlobalFilters();
+    });
     document.getElementById("adminLoginBtn").addEventListener("click", tryLogin);
     document.getElementById("adminPasswordInput").addEventListener("keydown", e => {
       if (e.key === "Enter") tryLogin();
