@@ -1451,31 +1451,76 @@ function buildInspirationPrompt({ role, roleReply, conversation }) {
     "",
     "【输出内容要求】",
     `1. 你现在是「User」，请从User的视角回复${roleName}。`,
-    "2. 回复需要有台词发言，并且角色的动作、表情、神态、心理活动、感官反应、身体状态等旁白部分需要尽量丰富，描写细腻。",
-    "3. 请给出2条彼此差异明显、可以直接发送的候选回复。",
+    "2. 请给出2条彼此差异明显、可以直接发送的候选回复。",
+    "3. 每条候选只能包含：一个中文括号（）里的动作/心理/表情描写 + 一句台词。",
+    "4. 不要写第二个括号，不要写多段旁白，不要连续追问，不要长篇描写。",
+    "5. 台词保持即时聊天节奏，短促自然，通常不超过一句。",
     "",
     "【输出格式要求】",
     "如果没有对格式的特殊要求，请将动作、表情、神态、心理活动、感官反应、身体状态等放在中文括号（）中，作为旁白。",
-    "只输出严格 JSON，不要 Markdown，不要解释。格式：{\"options\":[\"候选1\",\"候选2\"]}",
+    "只输出严格 JSON，不要 Markdown，不要解释，不要把 JSON 当成字符串。格式：{\"options\":[\"候选1\",\"候选2\"]}",
   ].filter(Boolean).join("\n");
 }
 
+function stripJsonFence(text) {
+  return String(text || "")
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+function normalizeParsedOptions(value, depth = 0) {
+  if (depth > 2 || value == null) return [];
+  if (typeof value === "string") {
+    const nested = stripJsonFence(value);
+    if (/^\s*[\[{]/.test(nested)) {
+      try {
+        return normalizeParsedOptions(JSON.parse(nested), depth + 1);
+      } catch {
+        return [nested];
+      }
+    }
+    return [value];
+  }
+  const values = Array.isArray(value) ? value : value.options;
+  if (!Array.isArray(values)) return [];
+  return values
+    .flatMap((item) => normalizeParsedOptions(item, depth + 1))
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .slice(0, 2);
+}
+
+function extractOptionsFromJsonLikeText(raw) {
+  const match = raw.match(/"options"\s*:\s*\[([\s\S]*?)\]\s*\}?$/);
+  if (!match) return [];
+  const body = match[1].trim().replace(/^"/, "").replace(/"$/, "");
+  return body
+    .split(/"\s*,\s*"/)
+    .map((item) => item.replace(/\\"/g, '"').replace(/\\\\/g, "\\"))
+    .map((item) => item.trim())
+    .filter((item) => item && !/^\{?\s*"options"\s*:/.test(item))
+    .slice(0, 2);
+}
+
 function parseInspirationOptions(content) {
-  const raw = String(content || "").trim();
+  const raw = stripJsonFence(content);
   if (!raw) return [];
 
   const jsonLike = raw.match(/\{[\s\S]*\}/)?.[0] || raw.match(/\[[\s\S]*\]/)?.[0] || "";
   if (jsonLike) {
     try {
       const parsed = JSON.parse(jsonLike);
-      const values = Array.isArray(parsed) ? parsed : parsed.options;
-      if (Array.isArray(values)) {
-        return values.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 2);
-      }
+      const options = normalizeParsedOptions(parsed);
+      if (options.length) return options;
     } catch {
-      // Fall back to line parsing below.
+      const options = extractOptionsFromJsonLikeText(jsonLike);
+      if (options.length) return options;
     }
   }
+
+  if (/^\{?\s*"options"\s*:/.test(raw)) return [];
 
   return raw
     .split(/\n+/)
@@ -1510,7 +1555,10 @@ function buildInspirationRecord({ record, prompt, resultA, resultB }) {
   const role = getSelectedRole();
   const optionsA = parseInspirationOptions(resultA.content);
   const optionsB = parseInspirationOptions(resultB.content);
-  const fallback = (source) => source === "a" ? resultA.content : resultB.content;
+  const fallback = (source) => {
+    const content = source === "a" ? resultA.content : resultB.content;
+    return /^\s*\{?\s*"options"\s*:/.test(String(content || "")) ? "（候选解析失败）我先自己想想怎么回。" : String(content || "").trim();
+  };
   const options = {
     a1: { source: "a", model: config.modelA, content: optionsA[0] || fallback("a") || "（暂无候选）" },
     a2: { source: "a", model: config.modelA, content: optionsA[1] || optionsA[0] || fallback("a") || "（暂无候选）" },
