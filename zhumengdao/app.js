@@ -536,6 +536,7 @@ function buildRoleSystemPrompt(role, configuredPrompt = null) {
   if (!role) return "";
   return [
     `你正在扮演角色：${role.nickname}`,
+    role.gender ? `性别：${role.gender}` : "",
     role.identity ? `身份：${role.identity}` : "",
     role.persona ? `人物设定：${role.persona}` : "",
     role.opening ? `开场白参考：${role.opening}` : "",
@@ -548,6 +549,7 @@ function renderRolePreview() {
   if (!role) { el.rolePreview.textContent = "未找到角色设定。"; return; }
   const lines = [
     `昵称：${role.nickname}`,
+    role.gender ? `性别：${role.gender}` : "",
     role.identity ? `身份：${role.identity}` : "",
     role.persona ? `设定：${shortText(role.persona, 420)}` : "",
     role.opening ? `开场白：${shortText(role.opening, 180)}` : "",
@@ -1457,6 +1459,7 @@ async function loadRoles() {
     .map((item) => ({
       id: String(item?.id || ""),
       nickname: String(item?.nickname || ""),
+      gender: String(item?.gender || ""),
       identity: String(item?.identity || ""),
       persona: String(item?.persona || ""),
       opening: String(item?.opening || ""),
