@@ -1603,12 +1603,9 @@ function buildInspirationPrompt({ role, roleReply, conversation }) {
     `${roleName}：${roleReply}`,
     "",
     "【输出内容要求】",
-    `1. 你现在是「User」，请从User的视角回复${roleName}。`,
-    "2. 请给出2条可直接发送的候选回复，保持对话交流状态，不要写成长段内容。",
-    "",
-    "【输出格式要求】",
-    "如果没有对格式的特殊要求，请将动作、表情、神态、心理活动、感官反应、身体状态等放在中文括号（）中，作为旁白。",
-    "只输出严格 JSON，不要 Markdown，不要解释，不要把 JSON 当成字符串。格式：{\"options\":[\"候选1\",\"候选2\"]}",
+    `现在是在模拟 User 与${roleName}的角色扮演对话。请从 User 视角给出2条可以继续对话的回复候选。`,
+    "回复中如有动作、表情、神态、心理活动、感官反应、身体状态等旁白，请放在中文括号（）中。",
+    "请只输出可解析 JSON，格式：{\"options\":[\"候选1\",\"候选2\"]}",
   ].filter(Boolean).join("\n");
 }
 
@@ -1708,11 +1705,8 @@ function buildSelectedConversationWithReply(record, selectedContent) {
 function buildContinuePrompt({ role }) {
   const roleName = role?.nickname || "角色";
   return [
-    `请继续以${roleName}的身份，承接上一条角色回复自然延续。`,
-    "要求：",
-    "1. 只输出角色会继续说/做的内容，不要替 User 发言。",
-    "2. 保持当前情绪、关系和场景，维持对话交流状态，不要写成长段内容。",
-    "3. 不要解释你的写作意图，不要输出 JSON 或 Markdown。",
+    `现在是在模拟 User 与${roleName}的角色扮演对话。请继续以${roleName}的身份回复下一轮。`,
+    "回复中如有动作、表情、神态、心理活动、感官反应、身体状态等旁白，请放在中文括号（）中。",
   ].join("\n");
 }
 
@@ -1873,13 +1867,14 @@ function syncInspirationHistory(updated) {
 
 function syncContinueHistory(updated) {
   const idx = state.history.findIndex((item) => item.type === "continue" && item.id === updated.id);
+  const responses = updated.responses || { a: updated.apiA, b: updated.apiB };
   const historyRow = {
     type: "continue",
     id: updated.id,
     turnId: updated.turnId,
     afterTurnId: updated.afterTurnId,
     turnOrder: updated.turnOrder,
-    responses: { a: updated.apiA, b: updated.apiB },
+    responses,
     displayOrder: updated.displayOrder,
     selected: updated.selected,
     selectedModel: updated.selectedModel,
