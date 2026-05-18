@@ -24,6 +24,11 @@
     .kpi-value { font-size: 1.7rem; font-weight: 700; line-height: 1.1; }
     .kpi-sub { font-size: .75rem; color: var(--text-soft); }
     .kpi-ok .kpi-value { color: var(--ok); }
+    .stats-tabs { display: flex; gap: 8px; align-items: center; padding: 4px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); width: fit-content; max-width: 100%; overflow-x: auto; }
+    .stats-tab { font: inherit; font-size: .82rem; font-weight: 700; color: var(--text-soft); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 7px 12px; cursor: pointer; white-space: nowrap; }
+    .stats-tab.active { color: var(--accent); background: var(--accent-light); border-color: color-mix(in srgb, var(--accent) 28%, var(--line)); }
+    .stats-pane { display: flex; flex-direction: column; gap: 16px; }
+    .stats-pane.hidden { display: none; }
 
     /* Ranking */
     .ranking-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: 16px 18px; box-shadow: var(--shadow-sm); }
@@ -61,14 +66,12 @@
     .perf-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
     .perf-table tr:last-child td { border-bottom: none; }
     .perf-note { font-size: .75rem; color: var(--text-soft); padding: 0 16px 12px; }
-    .inspiration-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; padding: 14px 16px; }
-    .inspiration-stat { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; background: #fafcff; }
-    .inspiration-stat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.1; }
-    .inspiration-stat-label { font-size: .74rem; color: var(--text-soft); margin-top: 3px; }
-    .inspiration-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-    .inspiration-choice { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; background: #fff; font-size: .82rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+    .mode-note { margin: -4px 2px 0; font-size: .78rem; color: var(--text-soft); }
+    .inspiration-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; align-items: start; }
+    .inspiration-choice { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; background: #fff; font-size: .82rem; line-height: 1.55; word-break: break-word; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
     .inspiration-choice.chosen { border-color: var(--accent); background: var(--accent-light); }
-    .inspiration-choice-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; font-size: .72rem; color: var(--text-soft); font-weight: 700; }
+    .inspiration-choice-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: .72rem; color: var(--text-soft); font-weight: 700; }
+    .inspiration-choice-body { white-space: pre-wrap; }
     .inspiration-final { margin: 0; font-size: .78rem; color: var(--text-soft); padding: 6px 8px; background: #f7f9fd; border-radius: var(--radius-sm); border: 1px solid var(--line); white-space: pre-wrap; }
 
     .section-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); overflow: hidden; }
@@ -207,41 +210,58 @@
       </div>
     </div>
 
-    <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-label">总轮次</div><div class="kpi-value" id="kpiTotal">—</div></div>
-      <div class="kpi-card kpi-ok"><div class="kpi-label">已评</div><div class="kpi-value" id="kpiVotes">—</div></div>
-      <div class="kpi-card"><div class="kpi-label">跳过</div><div class="kpi-value" id="kpiSkip">—</div></div>
-      <div class="kpi-card"><div class="kpi-label">对话数</div><div class="kpi-value" id="kpiSessions">—</div></div>
-      <div class="kpi-card"><div class="kpi-label">平均 TTFT</div><div class="kpi-value" id="kpiAvgTtft">—</div><div class="kpi-sub">ms</div></div>
-      <div class="kpi-card"><div class="kpi-label">平均 TPS</div><div class="kpi-value" id="kpiAvgTps">—</div><div class="kpi-sub">tokens/s</div></div>
+    <div class="stats-tabs" role="tablist" aria-label="评测类型">
+      <button class="stats-tab active" id="tabNormal" type="button" role="tab" aria-selected="true" aria-controls="normalStatsPane" data-stats-tab="normal">正常对话 A/B</button>
+      <button class="stats-tab" id="tabInspiration" type="button" role="tab" aria-selected="false" aria-controls="inspirationStatsPane" data-stats-tab="inspiration">灵感模式 A/B</button>
     </div>
 
-    <div class="ranking-card">
-      <h2>模型排名</h2>
-      <div id="rankingBody"><p class="empty-state" style="padding:8px 0">暂无数据</p></div>
-    </div>
-
-    <div class="matrix-card">
-      <h2>对战矩阵（行 vs 列）</h2>
-      <div class="matrix-scroll" id="matrixBody"><p class="empty-state">暂无数据</p></div>
-      <p class="matrix-note">格子显示：行模型 vs 列模型 的胜场/总场次（胜率%）。相同模型对战不计入。</p>
-    </div>
-
-    <div class="section-card">
-      <div class="section-head">
-        <h2>速度统计（TTFT / TPS）</h2>
+    <section class="stats-pane" id="normalStatsPane" role="tabpanel" aria-labelledby="tabNormal">
+      <p class="mode-note">统计口径：用户在正常角色回复 A/B 中选择的胜者。</p>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">总轮次</div><div class="kpi-value" id="kpiTotal">—</div></div>
+        <div class="kpi-card kpi-ok"><div class="kpi-label">已评</div><div class="kpi-value" id="kpiVotes">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">跳过</div><div class="kpi-value" id="kpiSkip">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">对话数</div><div class="kpi-value" id="kpiSessions">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">平均 TTFT</div><div class="kpi-value" id="kpiAvgTtft">—</div><div class="kpi-sub">ms</div></div>
+        <div class="kpi-card"><div class="kpi-label">平均 TPS</div><div class="kpi-value" id="kpiAvgTps">—</div><div class="kpi-sub">tokens/s</div></div>
       </div>
-      <div class="perf-wrap" id="perfTableBody"><p class="empty-state" style="padding:12px 0">暂无速度数据</p></div>
-      <p class="perf-note">统计口径：仅包含调用成功（ok=true）的模型响应。TPS 由 tokens / (总耗时 - TTFT) 计算。</p>
-    </div>
 
-    <div class="section-card">
-      <div class="section-head">
-        <h2>灵感统计</h2>
+      <div class="ranking-card">
+        <h2>模型排名</h2>
+        <div id="rankingBody"><p class="empty-state" style="padding:8px 0">暂无数据</p></div>
       </div>
-      <div class="inspiration-stats" id="inspirationStatsBody"></div>
-      <p class="perf-note">统计口径：仅包含灵感模式生成的候选，不计入上方普通 A/B 胜率。</p>
-    </div>
+
+      <div class="matrix-card">
+        <h2>对战矩阵（行 vs 列）</h2>
+        <div class="matrix-scroll" id="matrixBody"><p class="empty-state">暂无数据</p></div>
+        <p class="matrix-note">格子显示：行模型 vs 列模型 的胜场/总场次（胜率%）。相同模型对战不计入。</p>
+      </div>
+
+      <div class="section-card">
+        <div class="section-head">
+          <h2>速度统计（TTFT / TPS）</h2>
+        </div>
+        <div class="perf-wrap" id="perfTableBody"><p class="empty-state" style="padding:12px 0">暂无速度数据</p></div>
+        <p class="perf-note">统计口径：仅包含调用成功（ok=true）的模型响应。TPS 由 tokens / (总耗时 - TTFT) 计算。</p>
+      </div>
+    </section>
+
+    <section class="stats-pane hidden" id="inspirationStatsPane" role="tabpanel" aria-labelledby="tabInspiration">
+      <p class="mode-note">统计口径：灵感模式中，用户采用 A/B 任一候选即记为该模型胜出；最终手写视为未采用。</p>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">生成轮次</div><div class="kpi-value" id="inspTotal">—</div></div>
+        <div class="kpi-card kpi-ok"><div class="kpi-label">已采用</div><div class="kpi-value" id="inspUsed">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">未采用</div><div class="kpi-value" id="inspUnused">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">采用率</div><div class="kpi-value" id="inspUseRate">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">A 胜</div><div class="kpi-value" id="inspAWins">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">B 胜</div><div class="kpi-value" id="inspBWins">—</div></div>
+      </div>
+
+      <div class="ranking-card">
+        <h2>灵感模型排名</h2>
+        <div id="inspirationRankingBody"><p class="empty-state" style="padding:8px 0">暂无灵感采用数据</p></div>
+      </div>
+    </section>
 
     <div class="section-card">
       <div class="section-head">
@@ -294,6 +314,7 @@
     let allSessions = [];
     let currentDialogSessionId = "";
     let isArchiveSaving = false;
+    let activeStatsTab = "normal";
 
     // ── Global filter state ──────────────────────────────────
     let gFilterDateFrom = "";
@@ -592,31 +613,47 @@
 
     function buildInspirationStats(records) {
       const items = records.filter((record) => record.action === "inspiration" || record.kind === "inspiration");
-      const selectedByModel = new Map();
+      const byModel = new Map();
       let used = 0;
-      let edited = 0;
-      let manualAfter = 0;
+      let aWins = 0;
+      let bWins = 0;
+
+      function ensureModel(model) {
+        const key = model || "未知模型";
+        if (!byModel.has(key)) {
+          byModel.set(key, { model: key, generated: 0, wins: 0 });
+        }
+        return byModel.get(key);
+      }
 
       for (const item of items) {
+        const optionValues = Object.values(item.options || {});
+        const modelsInRound = new Set(optionValues.map((option) => option?.model).filter(Boolean));
+        for (const model of modelsInRound) ensureModel(model).generated += 1;
+
         if (item.used) {
           used += 1;
-          if (item.edited) edited += 1;
-          const model = item.selectedModel || "未知模型";
-          selectedByModel.set(model, (selectedByModel.get(model) || 0) + 1);
-        } else if (item.finalUserText) {
-          manualAfter += 1;
+          if (item.selected === "a") aWins += 1;
+          if (item.selected === "b") bWins += 1;
+          const selectedOption = item.options?.[item.selectedOptionId] || {};
+          const model = item.selectedModel || selectedOption.model || "未知模型";
+          ensureModel(model).wins += 1;
         }
       }
 
       return {
         total: items.length,
         used,
-        edited,
-        manualAfter,
+        unused: Math.max(0, items.length - used),
+        aWins,
+        bWins,
         useRate: items.length ? used / items.length : 0,
-        selectedRows: [...selectedByModel.entries()]
-          .map(([model, count]) => ({ model, count }))
-          .sort((a, b) => b.count - a.count || a.model.localeCompare(b.model)),
+        rows: [...byModel.values()]
+          .map((row) => ({
+            ...row,
+            winRate: row.generated ? row.wins / row.generated : 0,
+          }))
+          .sort((a, b) => b.wins - a.wins || b.winRate - a.winRate || a.model.localeCompare(b.model)),
       };
     }
 
@@ -752,34 +789,33 @@
     }
 
     function renderInspirationStats(stats) {
-      const el = document.getElementById("inspirationStatsBody");
-      const topModel = stats.selectedRows[0];
-      el.innerHTML = `
-        <div class="inspiration-stat">
-          <div class="inspiration-stat-value">${stats.total}</div>
-          <div class="inspiration-stat-label">生成轮次</div>
-        </div>
-        <div class="inspiration-stat">
-          <div class="inspiration-stat-value">${stats.used}</div>
-          <div class="inspiration-stat-label">被采用</div>
-        </div>
-        <div class="inspiration-stat">
-          <div class="inspiration-stat-value">${Math.round(stats.useRate * 100)}%</div>
-          <div class="inspiration-stat-label">采用率</div>
-        </div>
-        <div class="inspiration-stat">
-          <div class="inspiration-stat-value">${stats.edited}</div>
-          <div class="inspiration-stat-label">采用后编辑</div>
-        </div>
-        <div class="inspiration-stat">
-          <div class="inspiration-stat-value">${stats.manualAfter}</div>
-          <div class="inspiration-stat-label">生成后手写</div>
-        </div>
-        <div class="inspiration-stat">
-          <div class="inspiration-stat-value" title="${esc(topModel?.model || "")}">${topModel ? esc(shortText(topModel.model, 18)) : "—"}</div>
-          <div class="inspiration-stat-label">最高采用模型${topModel ? ` · ${topModel.count} 次` : ""}</div>
-        </div>
-      `;
+      document.getElementById("inspTotal").textContent = stats.total;
+      document.getElementById("inspUsed").textContent = stats.used;
+      document.getElementById("inspUnused").textContent = stats.unused;
+      document.getElementById("inspUseRate").textContent = `${Math.round(stats.useRate * 100)}%`;
+      document.getElementById("inspAWins").textContent = stats.aWins;
+      document.getElementById("inspBWins").textContent = stats.bWins;
+
+      const el = document.getElementById("inspirationRankingBody");
+      const rows = Array.isArray(stats.rows) ? stats.rows : [];
+      const effectiveRows = rows.filter((row) => row.generated > 0);
+      if (!effectiveRows.length) {
+        el.innerHTML = `<p class="empty-state" style="padding:8px 0">暂无灵感采用数据</p>`;
+        return;
+      }
+
+      const maxWins = Math.max(...effectiveRows.map((row) => row.wins), 1);
+      const medals = ["gold", "silver", "bronze"];
+      el.innerHTML = effectiveRows.map((row, i) => {
+        const pct = row.generated ? Math.round(row.wins / row.generated * 100) : 0;
+        return `
+          <div class="rank-row">
+            <div class="rank-num ${medals[i] || ""}">${i + 1}</div>
+            <div class="rank-model" title="${esc(row.model)}">${esc(row.model)}</div>
+            <div class="rank-bar-track"><div class="rank-bar-fill" style="width:${Math.round(row.wins / maxWins * 100)}%"></div></div>
+            <div class="rank-score">${row.wins}胜/${row.generated}次 · ${pct}%</div>
+          </div>`;
+      }).join("");
     }
 
     function renderStatsPanels() {
@@ -790,6 +826,17 @@
       renderMatrix(stats);
       renderPerfTable(stats);
       renderInspirationStats(buildInspirationStats(records));
+    }
+
+    function setStatsTab(tab) {
+      activeStatsTab = tab === "inspiration" ? "inspiration" : "normal";
+      for (const button of document.querySelectorAll("[data-stats-tab]")) {
+        const active = button.dataset.statsTab === activeStatsTab;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+      }
+      document.getElementById("normalStatsPane").classList.toggle("hidden", activeStatsTab !== "normal");
+      document.getElementById("inspirationStatsPane").classList.toggle("hidden", activeStatsTab !== "inspiration");
     }
 
     // ── 对话列表 ──────────────────────────────────────────
@@ -1006,18 +1053,19 @@
               ${order.map((optionId) => {
                 const option = rec.options?.[optionId] || {};
                 const chosen = rec.selectedOptionId === optionId;
+                const content = String(option.content || "（空候选）").trim();
                 return `
                   <div class="inspiration-choice${chosen ? " chosen" : ""}">
                     <div class="inspiration-choice-head">
                       <span>${esc(String(option.source || "").toUpperCase())} · ${esc(option.model || "未知模型")}</span>
                       ${chosen ? `<span>已选</span>` : ""}
                     </div>
-                    ${esc(option.content || "（空候选）")}
+                    <div class="inspiration-choice-body">${esc(content)}</div>
                   </div>
                 `;
               }).join("")}
             </div>
-            ${rec.finalUserText ? `<p class="inspiration-final">最终发送：${esc(rec.finalUserText)}${rec.edited ? "\n（已编辑）" : ""}</p>` : ""}
+            ${rec.finalUserText ? `<p class="inspiration-final">最终发送：${esc(String(rec.finalUserText).trim())}</p>` : ""}
           `;
           body.appendChild(block);
           continue;
@@ -1173,6 +1221,9 @@
 
     document.getElementById("refreshBtn").addEventListener("click", load);
     document.getElementById("exportBtn").addEventListener("click", exportRecords);
+    document.querySelectorAll("[data-stats-tab]").forEach((button) => {
+      button.addEventListener("click", () => setStatsTab(button.dataset.statsTab));
+    });
     document.getElementById("filterArchive").addEventListener("change", applyFilters);
     document.getElementById("globalDateFrom").addEventListener("change", applyGlobalFilters);
     document.getElementById("globalDateTo").addEventListener("change", applyGlobalFilters);

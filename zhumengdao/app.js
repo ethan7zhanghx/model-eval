@@ -11,6 +11,8 @@ const MAX_STATS_RECORDS = 1000;
 const DEFAULT_WORKSPACE_ID = "ws-default";
 const DEFAULT_PROJECT_ID = "proj-default";
 const DEFAULT_SYSTEM_PROMPT = "你正在一个角色扮演对话 App 中与用户互动。请始终保持角色语气和人设，每次回复只需包含一两轮的动作描写加对话，简练自然，符合即时聊天节奏。";
+const INSPIRATION_OPTION_MAX_CHARS = 160;
+const INSPIRATION_MAX_TOKENS = 420;
 
 function sanitizeEntityId(value, fallback = "") {
   const cleaned = String(value || "").trim().replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 120);
@@ -1199,7 +1201,7 @@ function buildFailedResult(sourceTag, latencyMs, content) {
   };
 }
 
-async function requestOne({ endpoint, apiKey, model, messages, temperature, sourceTag, side }) {
+async function requestOne({ endpoint, apiKey, model, messages, temperature, sourceTag, side, maxTokens = null }) {
   const start = performance.now();
   try {
     const response = await fetch(LLM_PROXY_ENDPOINT, {
@@ -1213,6 +1215,7 @@ async function requestOne({ endpoint, apiKey, model, messages, temperature, sour
           model,
           messages,
           temperature,
+          max_tokens: maxTokens || undefined,
           stream: true,
           stream_options: { include_usage: true },
           enable_thinking: false,
@@ -1451,35 +1454,86 @@ function buildInspirationPrompt({ role, roleReply, conversation }) {
     "",
     "【输出内容要求】",
     `1. 你现在是「User」，请从User的视角回复${roleName}。`,
-    "2. 回复需要有台词发言，并且角色的动作、表情、神态、心理活动、感官反应、身体状态等旁白部分需要尽量丰富，描写细腻。",
+    "2. 回复需要有台词发言，并且用一小段旁白补充动作、表情、心理或身体反应。",
     "3. 请给出2条彼此差异明显、可以直接发送的候选回复。",
+    `4. 每条候选控制在${INSPIRATION_OPTION_MAX_CHARS}个中文字符以内，宁可短一点，不要长篇描写。`,
     "",
     "【输出格式要求】",
     "如果没有对格式的特殊要求，请将动作、表情、神态、心理活动、感官反应、身体状态等放在中文括号（）中，作为旁白。",
-    "只输出严格 JSON，不要 Markdown，不要解释。格式：{\"options\":[\"候选1\",\"候选2\"]}",
+    "只输出严格 JSON，不要 Markdown，不要解释，不要把 JSON 当成字符串。格式：{\"options\":[\"候选1\",\"候选2\"]}",
   ].filter(Boolean).join("\n");
 }
 
+function limitInspirationOption(text) {
+  const cleaned = String(text || "").trim();
+  if (cleaned.length <= INSPIRATION_OPTION_MAX_CHARS) return cleaned;
+  return `${cleaned.slice(0, INSPIRATION_OPTION_MAX_CHARS - 1)}…`;
+}
+
+function stripJsonFence(text) {
+  return String(text || "")
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+function normalizeParsedOptions(value, depth = 0) {
+  if (depth > 2 || value == null) return [];
+  if (typeof value === "string") {
+    const nested = stripJsonFence(value);
+    if (/^\s*[\[{]/.test(nested)) {
+      try {
+        return normalizeParsedOptions(JSON.parse(nested), depth + 1);
+      } catch {
+        return [nested];
+      }
+    }
+    return [value];
+  }
+  const values = Array.isArray(value) ? value : value.options;
+  if (!Array.isArray(values)) return [];
+  return values
+    .flatMap((item) => normalizeParsedOptions(item, depth + 1))
+    .map(limitInspirationOption)
+    .filter(Boolean)
+    .slice(0, 2);
+}
+
+function extractOptionsFromJsonLikeText(raw) {
+  const match = raw.match(/"options"\s*:\s*\[([\s\S]*?)\]\s*\}?$/);
+  if (!match) return [];
+  const body = match[1].trim().replace(/^"/, "").replace(/"$/, "");
+  return body
+    .split(/"\s*,\s*"/)
+    .map((item) => item.replace(/\\"/g, '"').replace(/\\\\/g, "\\"))
+    .map(limitInspirationOption)
+    .filter((item) => item && !/^\{?\s*"options"\s*:/.test(item))
+    .slice(0, 2);
+}
+
 function parseInspirationOptions(content) {
-  const raw = String(content || "").trim();
+  const raw = stripJsonFence(content);
   if (!raw) return [];
 
   const jsonLike = raw.match(/\{[\s\S]*\}/)?.[0] || raw.match(/\[[\s\S]*\]/)?.[0] || "";
   if (jsonLike) {
     try {
       const parsed = JSON.parse(jsonLike);
-      const values = Array.isArray(parsed) ? parsed : parsed.options;
-      if (Array.isArray(values)) {
-        return values.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 2);
-      }
+      const options = normalizeParsedOptions(parsed);
+      if (options.length) return options;
     } catch {
-      // Fall back to line parsing below.
+      const options = extractOptionsFromJsonLikeText(jsonLike);
+      if (options.length) return options;
     }
   }
+
+  if (/^\{?\s*"options"\s*:/.test(raw)) return [];
 
   return raw
     .split(/\n+/)
     .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)]|[一二三四][、.])\s*/, "").trim())
+    .map(limitInspirationOption)
     .filter(Boolean)
     .slice(0, 2);
 }
@@ -1491,6 +1545,10 @@ function shuffleList(items) {
     [next[i], next[j]] = [next[j], next[i]];
   }
   return next;
+}
+
+function buildInspirationDisplayOrder() {
+  return shuffleList(["a1", "a2", "b1", "b2"]);
 }
 
 function buildSelectedConversationWithReply(record, selectedContent) {
@@ -1506,7 +1564,7 @@ function buildInspirationRecord({ record, prompt, resultA, resultB }) {
   const role = getSelectedRole();
   const optionsA = parseInspirationOptions(resultA.content);
   const optionsB = parseInspirationOptions(resultB.content);
-  const fallback = (source) => source === "a" ? resultA.content : resultB.content;
+  const fallback = (source) => limitInspirationOption(source === "a" ? resultA.content : resultB.content);
   const options = {
     a1: { source: "a", model: config.modelA, content: optionsA[0] || fallback("a") || "（暂无候选）" },
     a2: { source: "a", model: config.modelA, content: optionsA[1] || optionsA[0] || fallback("a") || "（暂无候选）" },
@@ -1535,7 +1593,7 @@ function buildInspirationRecord({ record, prompt, resultA, resultB }) {
     used: false,
     edited: false,
     finalUserText: "",
-    displayOrder: shuffleList(["a1", "a2", "b1", "b2"]),
+    displayOrder: buildInspirationDisplayOrder(),
     roleId: role ? role.id : "",
     roleName: role ? role.nickname : "",
     systemPrompt: prompt,
@@ -1618,8 +1676,8 @@ async function generateInspirationForTurn(record, selectedContent) {
 
   try {
     const [resultA, resultB] = await Promise.all([
-      requestOne({ endpoint: config.endpointA, apiKey: config.apiKeyA, model: config.modelA, messages, temperature: config.temperature, sourceTag: "a", side: "a" }),
-      requestOne({ endpoint: config.endpointB, apiKey: config.apiKeyB, model: config.modelB, messages, temperature: config.temperature, sourceTag: "b", side: "b" }),
+      requestOne({ endpoint: config.endpointA, apiKey: config.apiKeyA, model: config.modelA, messages, temperature: config.temperature, sourceTag: "a", side: "a", maxTokens: INSPIRATION_MAX_TOKENS }),
+      requestOne({ endpoint: config.endpointB, apiKey: config.apiKeyB, model: config.modelB, messages, temperature: config.temperature, sourceTag: "b", side: "b", maxTokens: INSPIRATION_MAX_TOKENS }),
     ]);
 
     const inspiration = buildInspirationRecord({ record, prompt, resultA, resultB });
