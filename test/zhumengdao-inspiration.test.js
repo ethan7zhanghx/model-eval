@@ -33,7 +33,12 @@ test('zhumengdao inspiration mode has chat UI and persistence contracts', async 
   assert.match(stats, /function buildInspirationStats/);
   assert.match(stats, /灵感模式 A\/B/);
   assert.match(stats, /灵感模型排名/);
+  assert.match(stats, /灵感对战矩阵/);
+  assert.match(stats, /灵感速度统计/);
+  assert.match(stats, /inspirationMatrixBody/);
+  assert.match(stats, /inspirationPerfTableBody/);
   assert.doesNotMatch(stats, /采用后编辑/);
+  assert.doesNotMatch(stats, /采用率/);
 });
 
 test('zhumengdao continue chat has manual AB flow and separate stats', async () => {
