@@ -1031,7 +1031,6 @@ function renderInspirationPanel() {
       el.inspirationPanel.classList.remove("hidden");
       el.inspirationPanel.innerHTML = `
         <div class="assist-actions">
-          <span>想不出怎么接？</span>
           <button type="button" class="assist-action-btn" data-assist-action="inspiration">灵感</button>
           <button type="button" class="assist-action-btn continue-action" data-assist-action="continue">继续聊</button>
         </div>
