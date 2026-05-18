@@ -311,8 +311,9 @@ function restoreSession(session, options = {}) {
         selectedModel: m.selectedModel,
       };
     }
-    return { role: m.role, content: m.content, source: m.source, time: m.time };
-  });
+    if (!m.content) return null;
+    return { role: m.role, content: m.content, source: m.source, time: m.time || nowText() };
+  }).filter(Boolean);
   const lastInspiration = [...state.history].reverse().find((m) => m.type === "inspiration" && !m.finalUserText);
   state.activeInspiration = lastInspiration || null;
   const lastContinue = [...state.history].reverse().find((m) => m.type === "continue" && !m.selected);
@@ -458,7 +459,7 @@ function renderHistoryList(sessions) {
   for (const s of sessions) {
     const item = document.createElement("div");
     item.className = "history-item";
-    const firstMsg = s.messages?.find((m) => m.role === "user" && m.type !== "compare");
+    const firstMsg = s.messages?.find((m) => m.role === "user" && m.type !== "compare" && m.content);
     const preview = firstMsg ? shortText(firstMsg.content, 60) : "（空对话）";
     const scope = [s.projectId, s.experimentId].filter(Boolean).map((value) => shortText(value, 16)).join(" / ");
     item.innerHTML = `

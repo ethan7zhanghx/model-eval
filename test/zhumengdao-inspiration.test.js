@@ -58,3 +58,20 @@ test('zhumengdao continue chat has manual AB flow and separate stats', async () 
   assert.match(stats, /function buildContinueStats/);
   assert.match(stats, /continueStatsPane/);
 });
+
+test('zhumengdao session restore preserves meta message types', async () => {
+  const [app, sessionsApi, server] = await Promise.all([
+    fs.readFile(path.join(root, 'zhumengdao', 'app.js'), 'utf8'),
+    fs.readFile(path.join(root, 'api', 'zhumengdao-sessions.js'), 'utf8'),
+    fs.readFile(path.join(root, 'server.js'), 'utf8'),
+  ]);
+
+  assert.match(sessionsApi, /m\?\.type === "inspiration"/);
+  assert.match(sessionsApi, /m\?\.type === "continue"/);
+  assert.match(sessionsApi, /normalizeSessionMessage/);
+  assert.match(server, /m\?\.type === "inspiration"/);
+  assert.match(server, /m\?\.type === "continue"/);
+  assert.match(server, /normalizeZmdSessionMessage/);
+  assert.match(app, /if \(!m\.content\) return null;/);
+  assert.match(app, /\.filter\(Boolean\)/);
+});
