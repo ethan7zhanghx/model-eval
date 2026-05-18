@@ -22,8 +22,8 @@ test('zhumengdao inspiration mode has chat UI and persistence contracts', async 
   assert.match(app, /function buildInspirationDisplayOrder/);
   assert.match(app, /function parseInspirationOptions/);
   assert.match(app, /data-assist-action="inspiration"/);
-  assert.match(app, /内容简短，不要写成长段/);
-  assert.match(app, /请保留你自己的表达风格/);
+  assert.match(app, /保持对话交流状态，不要写成长段内容/);
+  assert.doesNotMatch(app, /请保留你自己的表达风格/);
   assert.doesNotMatch(app, /INSPIRATION_MAX_TOKENS/);
   assert.match(app, /kind:\s*"inspiration"/);
   assert.match(recordsApi, /normalizeInspirationOptions/);
