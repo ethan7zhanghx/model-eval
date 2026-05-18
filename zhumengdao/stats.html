@@ -103,6 +103,9 @@
     .dialog-body { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
     .dialog-body::-webkit-scrollbar { width: 5px; }
     .dialog-body::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 99px; }
+    .system-prompt-box { border: 1px solid var(--line); border-radius: var(--radius-md); background: #f7f9fd; padding: 10px 12px; }
+    .system-prompt-box summary { cursor: pointer; font-size: .78rem; font-weight: 700; color: var(--text-soft); }
+    .system-prompt-body { margin-top: 8px; font-size: .78rem; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow-y: auto; }
 
     .turn-block { display: flex; flex-direction: column; gap: 8px; }
     .turn-compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -896,6 +899,17 @@
 
       const body = document.getElementById("dialogBody");
       body.innerHTML = "";
+
+      const systemPrompt = session.systemPrompt || recs.find((rec) => rec.systemPrompt)?.systemPrompt || "";
+      if (systemPrompt) {
+        const promptBox = document.createElement("details");
+        promptBox.className = "system-prompt-box";
+        promptBox.innerHTML = `
+          <summary>System Prompt</summary>
+          <div class="system-prompt-body">${esc(systemPrompt)}</div>
+        `;
+        body.appendChild(promptBox);
+      }
 
       for (const rec of recs.sort((a, b) => a.turnOrder - b.turnOrder)) {
         const userEl = document.createElement("article");

@@ -9,6 +9,7 @@ const LS_KEY_DEVICE = "zhumengdao-device-id";
 const MAX_STATS_RECORDS = 1000;
 const DEFAULT_WORKSPACE_ID = "ws-default";
 const DEFAULT_PROJECT_ID = "proj-default";
+const DEFAULT_SYSTEM_PROMPT = "你正在一个角色扮演对话 App 中与用户互动。请始终保持角色语气和人设，每次回复只需包含一两轮的动作描写加对话，简练自然，符合即时聊天节奏。";
 
 function sanitizeEntityId(value, fallback = "") {
   const cleaned = String(value || "").trim().replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 120);
@@ -33,6 +34,7 @@ const DEFAULT_CONFIG = {
   apiKeyB: "",
   modelB: "gpt-4o-mini",
   selectedRoleId: "",
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
   temperature: 0,
   rememberKeys: false,
 };
@@ -53,6 +55,7 @@ const state = {
   linkedRunId: "",
   reportId: "",
   requestedSessionId: "",
+  sessionSystemPrompt: "",
   storageReady: false,
   serverDefaultKeys: { a: false, b: false },
   serverDef: { a: {}, b: {} },
@@ -75,6 +78,8 @@ const el = {
   sessionModalBody: document.getElementById("sessionModalBody"),
   roleSelect: document.getElementById("roleSelect"),
   rolePreview: document.getElementById("rolePreview"),
+  systemPromptInput: document.getElementById("systemPromptInput"),
+  systemPromptLockHint: document.getElementById("systemPromptLockHint"),
   temperatureInput: document.getElementById("temperatureInput"),
   rememberKeysInput: document.getElementById("rememberKeysInput"),
   endpointAInput: document.getElementById("endpointAInput"),
@@ -119,6 +124,7 @@ function startNewSession() {
   state.sessionId = createId("session");
   state.sessionCreatedAt = Date.now();
   state.turnOrder = 0;
+  state.sessionSystemPrompt = "";
 }
 
 function hydratePlatformContext() {
@@ -157,6 +163,7 @@ function buildScopedApiUrl(baseUrl, extraParams = {}) {
 function buildSessionPayload() {
   const config = readConfigFromInputs();
   const role = getSelectedRole();
+  const systemPrompt = state.sessionSystemPrompt || buildRoleSystemPrompt(role, config.systemPrompt);
   return {
     id: state.sessionId,
     workspaceId: state.workspaceId,
@@ -168,13 +175,14 @@ function buildSessionPayload() {
     updatedAt: Date.now(),
     roleId: role ? role.id : "",
     roleName: role ? role.nickname : "",
-    systemPrompt: buildRoleSystemPrompt(role),
+    systemPrompt,
     temperature: config.temperature,
     config: {
       modelA: config.modelA,
       modelB: config.modelB,
       endpointHostA: parseHost(config.endpointA),
       endpointHostB: parseHost(config.endpointB),
+      systemPrompt: config.systemPrompt,
     },
     turnCount: state.turnOrder,
     deviceId: getDeviceId(),
@@ -209,6 +217,7 @@ function restoreSession(session, options = {}) {
   state.sessionCreatedAt = session.createdAt || Date.now();
   state.turnOrder = session.turnCount || 0;
   state.pendingTurn = null;
+  state.sessionSystemPrompt = session.systemPrompt || "";
   state.loading = false;
   state.loadingUserText = "";
   state.history = (session.messages || []).map((m) => {
@@ -217,6 +226,9 @@ function restoreSession(session, options = {}) {
     }
     return { role: m.role, content: m.content, source: m.source, time: m.time };
   });
+  if (el.systemPromptInput) {
+    el.systemPromptInput.value = session.config?.systemPrompt || session.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+  }
   sessionStorage.setItem(LS_KEY_SESSION, session.id);
   renderTimeline();
   renderComparePanel();
@@ -291,6 +303,10 @@ function extractContentText(content) {
 function sanitizeEndpoint(value) { return String(value || "").trim(); }
 function sanitizeModel(value) { return String(value || "").trim(); }
 function sanitizeKey(value) { return String(value || "").trim(); }
+function sanitizeSystemPrompt(value) {
+  const cleaned = String(value || "").trim().slice(0, 12000);
+  return cleaned || DEFAULT_SYSTEM_PROMPT;
+}
 
 function nowText() {
   return new Date().toLocaleTimeString("zh-CN", { hour12: false });
@@ -515,14 +531,15 @@ function getSelectedRole() {
   return state.roles.find((role) => role.id === roleId) || null;
 }
 
-function buildRoleSystemPrompt(role) {
+function buildRoleSystemPrompt(role, configuredPrompt = null) {
+  const prompt = sanitizeSystemPrompt(configuredPrompt ?? el.systemPromptInput?.value ?? DEFAULT_SYSTEM_PROMPT);
   if (!role) return "";
   return [
     `你正在扮演角色：${role.nickname}`,
     role.identity ? `身份：${role.identity}` : "",
     role.persona ? `人物设定：${role.persona}` : "",
     role.opening ? `开场白参考：${role.opening}` : "",
-    "你正在一个角色扮演对话 App 中与用户互动。请始终保持角色语气和人设，每次回复只需包含一两轮的动作描写加对话，简练自然，符合即时聊天节奏。",
+    prompt,
   ].filter(Boolean).join("\n");
 }
 
@@ -554,6 +571,7 @@ function readConfigFromInputs() {
     apiKeyB: sanitizeKey(el.apiKeyBInput.value),
     modelB: sanitizeModel(el.modelBInput.value),
     selectedRoleId: String(el.roleSelect.value || ""),
+    systemPrompt: sanitizeSystemPrompt(el.systemPromptInput?.value),
     temperature: clampTemperature(Number(el.temperatureInput.value)),
     rememberKeys: !!el.rememberKeysInput.checked,
   };
@@ -566,6 +584,7 @@ function applyConfigToInputs(config) {
   el.endpointBInput.value = config.endpointB;
   el.apiKeyBInput.value = config.apiKeyB;
   el.modelBInput.value = config.modelB;
+  if (el.systemPromptInput) el.systemPromptInput.value = sanitizeSystemPrompt(config.systemPrompt);
   el.temperatureInput.value = String(config.temperature);
   el.rememberKeysInput.checked = !!config.rememberKeys;
 }
@@ -627,6 +646,7 @@ function hydrateConfig(serverDef = { a: {}, b: {} }) {
     modelA: sanitizeModel(userModelA || serverDef.a?.model || DEFAULT_CONFIG.modelA),
     modelB: sanitizeModel(userModelB || serverDef.b?.model || DEFAULT_CONFIG.modelB),
     selectedRoleId: String(saved.selectedRoleId || ""),
+    systemPrompt: sanitizeSystemPrompt(saved.systemPrompt || DEFAULT_CONFIG.systemPrompt),
     apiKeyA: saved.rememberKeys ? sanitizeKey(saved.apiKeyA) : "",
     apiKeyB: saved.rememberKeys ? sanitizeKey(saved.apiKeyB) : "",
     temperature: clampTemperature(Number(saved.temperature)),
@@ -782,9 +802,15 @@ function renderComparePanel() {
 }
 
 function updateSettingsLock() {
-  const started = state.history.length > 0 || !!state.pendingTurn;
+  const started = state.loading || state.history.length > 0 || !!state.pendingTurn || !!state.sessionSystemPrompt;
   el.roleSelect.disabled = started;
   el.temperatureInput.disabled = started;
+  if (el.systemPromptInput) el.systemPromptInput.disabled = started;
+  if (el.systemPromptLockHint) {
+    el.systemPromptLockHint.textContent = started
+      ? "当前会话已锁定 System Prompt；如需调整，请新建对话。"
+      : "会话开始后将锁定，确保同一组评测口径一致。";
+  }
   if (el.rolePreview) {
     el.rolePreview.style.opacity = started ? "0.5" : "";
   }
@@ -805,7 +831,7 @@ function setBusy(busy) {
 function buildRequestMessages(userText) {
   const messages = [];
   const role = getSelectedRole();
-  const systemPrompt = buildRoleSystemPrompt(role);
+  const systemPrompt = state.sessionSystemPrompt || buildRoleSystemPrompt(role);
   if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
   for (const item of state.history) {
     if (item.type === "compare") {
@@ -1180,7 +1206,7 @@ function buildTurnRecord(action, selected = "") {
   if (!state.pendingTurn) return null;
   const config = readConfigFromInputs();
   const role = getSelectedRole();
-  const systemPrompt = buildRoleSystemPrompt(role);
+  const systemPrompt = state.sessionSystemPrompt || buildRoleSystemPrompt(role, config.systemPrompt);
   return {
     id: createId("rec"),
     workspaceId: state.workspaceId,
@@ -1249,6 +1275,9 @@ async function sendUserTurn() {
   if (err) { setStatus(err, "err"); return; }
 
   persistConfig();
+  if (!state.sessionSystemPrompt) {
+    state.sessionSystemPrompt = buildRoleSystemPrompt(getSelectedRole(), config.systemPrompt);
+  }
   const messages = buildRequestMessages(userText);
   const temperature = clampTemperature(Number(config.temperature));
   el.temperatureInput.value = String(temperature);
@@ -1402,7 +1431,7 @@ function bindEvents() {
   el.roleSelect.addEventListener("change", () => { renderRolePreview(); persistConfig(); });
 
   const configInputs = [
-    el.temperatureInput, el.rememberKeysInput,
+    el.temperatureInput, el.systemPromptInput, el.rememberKeysInput,
     el.endpointAInput, el.apiKeyAInput, el.modelAInput,
     el.endpointBInput, el.apiKeyBInput, el.modelBInput,
   ];
