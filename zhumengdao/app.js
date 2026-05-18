@@ -6,6 +6,7 @@ const ROLES_DATA_URL = "./roles.json";
 const LS_KEY_CONFIG = "zhumengdao-dual-chat-config-v2";
 const LS_KEY_SESSION = "zhumengdao-last-session-id";
 const LS_KEY_DEVICE = "zhumengdao-device-id";
+const LS_KEY_INSPIRATION = "zhumengdao-inspiration-enabled";
 const MAX_STATS_RECORDS = 1000;
 const DEFAULT_WORKSPACE_ID = "ws-default";
 const DEFAULT_PROJECT_ID = "proj-default";
@@ -43,6 +44,10 @@ const state = {
   roles: [],
   history: [],
   pendingTurn: null,
+  activeInspiration: null,
+  selectedInspiration: null,
+  inspirationEnabled: false,
+  inspirationLoading: false,
   busy: false,
   loading: false,
   loadingUserText: "",
@@ -62,6 +67,7 @@ const state = {
 };
 
 const el = {
+  inspirationToggleBtn: document.getElementById("inspirationToggleBtn"),
   openSettingsBtn: document.getElementById("openSettingsBtn"),
   closeSettingsBtn: document.getElementById("closeSettingsBtn"),
   settingsPanel: document.getElementById("settingsPanel"),
@@ -90,6 +96,7 @@ const el = {
   modelBInput: document.getElementById("modelBInput"),
   clearChatBtn: document.getElementById("clearChatBtn"),
   statusBar: document.getElementById("statusBar"),
+  inspirationPanel: document.getElementById("inspirationPanel"),
   chatTimeline: document.getElementById("chatTimeline"),
   compareHeaderLabel: document.getElementById("compareHeaderLabel"),
   comparePanel: document.getElementById("comparePanel"),
@@ -190,6 +197,20 @@ function buildSessionPayload() {
       if (m.type === "compare") {
         return { type: "compare", responses: m.responses, displayOrder: m.displayOrder, voted: m.voted, votedModel: m.votedModel };
       }
+      if (m.type === "inspiration") {
+        return {
+          type: "inspiration",
+          id: m.id,
+          afterTurnId: m.afterTurnId,
+          options: m.options,
+          displayOrder: m.displayOrder,
+          selectedOptionId: m.selectedOptionId,
+          selectedModel: m.selectedModel,
+          used: !!m.used,
+          edited: !!m.edited,
+          finalUserText: m.finalUserText || "",
+        };
+      }
       return { role: m.role, content: m.content, source: m.source, time: m.time };
     }),
   };
@@ -217,6 +238,9 @@ function restoreSession(session, options = {}) {
   state.sessionCreatedAt = session.createdAt || Date.now();
   state.turnOrder = session.turnCount || 0;
   state.pendingTurn = null;
+  state.activeInspiration = null;
+  state.selectedInspiration = null;
+  state.inspirationLoading = false;
   state.sessionSystemPrompt = session.systemPrompt || "";
   state.loading = false;
   state.loadingUserText = "";
@@ -224,14 +248,31 @@ function restoreSession(session, options = {}) {
     if (m.type === "compare") {
       return { type: "compare", responses: m.responses, displayOrder: m.displayOrder, voted: m.voted, votedModel: m.votedModel };
     }
+    if (m.type === "inspiration") {
+      return {
+        type: "inspiration",
+        id: m.id,
+        afterTurnId: m.afterTurnId,
+        options: m.options,
+        displayOrder: m.displayOrder,
+        selectedOptionId: m.selectedOptionId,
+        selectedModel: m.selectedModel,
+        used: !!m.used,
+        edited: !!m.edited,
+        finalUserText: m.finalUserText || "",
+      };
+    }
     return { role: m.role, content: m.content, source: m.source, time: m.time };
   });
+  const lastInspiration = [...state.history].reverse().find((m) => m.type === "inspiration" && !m.finalUserText);
+  state.activeInspiration = lastInspiration || null;
   if (el.systemPromptInput) {
     el.systemPromptInput.value = session.config?.systemPrompt || session.systemPrompt || DEFAULT_SYSTEM_PROMPT;
   }
   sessionStorage.setItem(LS_KEY_SESSION, session.id);
   renderTimeline();
   renderComparePanel();
+  renderInspirationPanel();
   setBusy(false);
   setStatus(statusText, "ok");
 }
@@ -391,6 +432,10 @@ function escapeHtml(str) {
   return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function normalizeForCompare(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
 function toFiniteNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -467,6 +512,35 @@ function renderSessionDetail(session, turnRecords) {
   }
 
   for (const rec of turnRecords) {
+    if (rec.action === "inspiration" || rec.kind === "inspiration") {
+      const block = document.createElement("div");
+      block.className = "timeline-compare inspiration-timeline";
+      const order = Array.isArray(rec.displayOrder) && rec.displayOrder.length === 4
+        ? rec.displayOrder
+        : ["a1", "a2", "b1", "b2"];
+      block.innerHTML = `
+        <div class="inspiration-head">
+          <span>灵感模式</span>
+          <span class="inspiration-source">${rec.used ? "已采用" : rec.finalUserText ? "生成后手写" : "未使用"}</span>
+        </div>
+        <div class="inspiration-grid">
+          ${order.map((optionId) => {
+            const option = rec.options?.[optionId] || {};
+            const chosen = rec.selectedOptionId === optionId;
+            return `
+              <div class="inspiration-option${chosen ? " selected" : ""}">
+                <span>${escapeHtml(option.content || "（空候选）")}</span>
+                ${chosen ? `<span class="inspiration-source">${escapeHtml(String(option.source || "").toUpperCase())} · ${escapeHtml(option.model || "未知模型")}</span>` : ""}
+              </div>
+            `;
+          }).join("")}
+        </div>
+        ${rec.finalUserText ? `<div class="msg-bubble">最终发送：${escapeHtml(rec.finalUserText)}</div>` : ""}
+      `;
+      el.sessionModalBody.appendChild(block);
+      continue;
+    }
+
     // User message
     const userEl = document.createElement("article");
     userEl.className = "msg user";
@@ -727,9 +801,30 @@ function createMessageNode(message) {
   return item;
 }
 
+function getInspirationOption(row, optionId) {
+  if (!row || !row.options || !optionId) return null;
+  return row.options[optionId] || null;
+}
+
+function createInspirationNode(row) {
+  const item = document.createElement("div");
+  item.className = "timeline-compare inspiration-timeline";
+  const option = getInspirationOption(row, row.selectedOptionId);
+  const sourceText = option ? `${option.source.toUpperCase()} · ${option.model || "未知模型"}` : "未使用";
+  item.innerHTML = `
+    <div class="inspiration-head">
+      <span>灵感模式</span>
+      <span class="inspiration-source">${escapeHtml(sourceText)}</span>
+    </div>
+    <div class="msg-bubble">${escapeHtml(row.finalUserText || option?.content || "已生成候选，用户未采用。")}</div>
+  `;
+  return item;
+}
+
 function renderTimeline() {
   el.chatTimeline.innerHTML = "";
   updateSettingsLock();
+  renderInspirationPanel();
   const rows = [...state.history];
 
   if (!rows.length && !state.loading) {
@@ -743,6 +838,8 @@ function renderTimeline() {
   for (const row of rows) {
     if (row.type === "compare") {
       el.chatTimeline.appendChild(createCompareNode(row));
+    } else if (row.type === "inspiration") {
+      el.chatTimeline.appendChild(createInspirationNode(row));
     } else {
       el.chatTimeline.appendChild(createMessageNode(row));
     }
@@ -775,6 +872,57 @@ function renderTimeline() {
   el.chatTimeline.scrollTop = el.chatTimeline.scrollHeight;
 }
 
+function renderInspirationPanel() {
+  if (!el.inspirationPanel) return;
+
+  if (state.inspirationLoading) {
+    el.inspirationPanel.classList.remove("hidden");
+    el.inspirationPanel.innerHTML = `
+      <div class="inspiration-head">
+        <span>正在生成灵感</span>
+        <span class="inspiration-source">A/B 各 2 条</span>
+      </div>
+    `;
+    return;
+  }
+
+  const row = state.activeInspiration;
+  if (!row || !row.options) {
+    el.inspirationPanel.classList.add("hidden");
+    el.inspirationPanel.innerHTML = "";
+    return;
+  }
+
+  const selectedId = state.selectedInspiration?.optionId || row.selectedOptionId || "";
+  const order = Array.isArray(row.displayOrder) && row.displayOrder.length === 4
+    ? row.displayOrder
+    : ["a1", "a2", "b1", "b2"];
+  el.inspirationPanel.classList.remove("hidden");
+  el.inspirationPanel.innerHTML = `
+    <div class="inspiration-head">
+      <span>可选回复灵感</span>
+      <span class="inspiration-source">${selectedId ? "已选择，再次点击可取消" : "选择后会填入输入框"}</span>
+    </div>
+    <div class="inspiration-grid">
+      ${order.map((optionId) => {
+        const option = row.options[optionId] || {};
+        const chosen = selectedId === optionId;
+        const source = `${String(option.source || "").toUpperCase()} · ${option.model || "未知模型"}`;
+        return `
+          <button class="inspiration-option${chosen ? " selected" : ""}" type="button" data-option-id="${escapeHtml(optionId)}">
+            <span>${escapeHtml(option.content || "（空候选）")}</span>
+            ${chosen ? `<span class="inspiration-source">${escapeHtml(source)}</span>` : ""}
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+
+  for (const button of el.inspirationPanel.querySelectorAll("[data-option-id]")) {
+    button.addEventListener("click", () => selectInspirationOption(button.getAttribute("data-option-id")));
+  }
+}
+
 function renderComparePanel() {
   const pending = state.pendingTurn;
   if (!pending) {
@@ -801,6 +949,12 @@ function renderComparePanel() {
     el.chatTimeline.style.paddingBottom = `${h + 16}px`;
     el.chatTimeline.scrollTop = el.chatTimeline.scrollHeight;
   });
+}
+
+function updateInspirationToggle() {
+  if (!el.inspirationToggleBtn) return;
+  el.inspirationToggleBtn.setAttribute("aria-pressed", state.inspirationEnabled ? "true" : "false");
+  el.inspirationToggleBtn.textContent = state.inspirationEnabled ? "灵感开" : "灵感关";
 }
 
 function updateSettingsLock() {
@@ -842,6 +996,9 @@ function buildRequestMessages(userText) {
         const chosen = item.responses[item.voted];
         if (chosen?.content) messages.push({ role: "assistant", content: chosen.content });
       }
+    } else if (item.type === "inspiration") {
+      // 灵感轮次是元数据，不进入角色对话上下文。
+      continue;
     } else {
       messages.push({ role: item.role, content: item.content });
     }
@@ -919,6 +1076,17 @@ async function appendRecord(item) {
     body: JSON.stringify({ item }),
   });
   if (!payload?.item) throw new ApiError("Record append failed", { code: "RECORD_APPEND_FAILED" });
+  return payload.item;
+}
+
+async function patchRecord(id, patch) {
+  const payload = await requestRecordsApi(buildScopedApiUrl(RECORDS_API_ENDPOINT), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, patch }),
+  });
+  if (!payload?.item) throw new ApiError("Record update failed", { code: "RECORD_UPDATE_FAILED" });
+  return payload.item;
 }
 
 async function fetchRecords(limit = MAX_STATS_RECORDS) {
@@ -1260,6 +1428,246 @@ function buildTurnRecord(action, selected = "") {
   };
 }
 
+function buildInspirationPrompt({ role, roleReply, conversation }) {
+  const roleName = role?.nickname || "角色";
+  const roleProfile = [
+    role?.gender ? `性别：${role.gender}` : "",
+    role?.identity ? `身份：${role.identity}` : "",
+    role?.persona ? role.persona : "",
+    role?.opening ? `开场白：${role.opening}` : "",
+  ].filter(Boolean).join("\n");
+  const context = conversation
+    .map((item) => `${item.role === "assistant" ? roleName : "User"}：${item.content}`)
+    .join("\n");
+
+  return [
+    `你是User，正在和${roleName}进行互动。`,
+    "",
+    "【角色卡】",
+    `角色名称：${roleName}`,
+    roleProfile,
+    "",
+    "【最近对话】",
+    context,
+    `${roleName}：${roleReply}`,
+    "",
+    "【输出内容要求】",
+    `1. 你现在是「User」，请从User的视角回复${roleName}。`,
+    "2. 回复需要有台词发言，并且角色的动作、表情、神态、心理活动、感官反应、身体状态等旁白部分需要尽量丰富，描写细腻。",
+    "3. 请给出2条彼此差异明显、可以直接发送的候选回复。",
+    "",
+    "【输出格式要求】",
+    "如果没有对格式的特殊要求，请将动作、表情、神态、心理活动、感官反应、身体状态等放在中文括号（）中，作为旁白。",
+    "只输出严格 JSON，不要 Markdown，不要解释。格式：{\"options\":[\"候选1\",\"候选2\"]}",
+  ].filter(Boolean).join("\n");
+}
+
+function parseInspirationOptions(content) {
+  const raw = String(content || "").trim();
+  if (!raw) return [];
+
+  const jsonLike = raw.match(/\{[\s\S]*\}/)?.[0] || raw.match(/\[[\s\S]*\]/)?.[0] || "";
+  if (jsonLike) {
+    try {
+      const parsed = JSON.parse(jsonLike);
+      const values = Array.isArray(parsed) ? parsed : parsed.options;
+      if (Array.isArray(values)) {
+        return values.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 2);
+      }
+    } catch {
+      // Fall back to line parsing below.
+    }
+  }
+
+  return raw
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)]|[一二三四][、.])\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, 2);
+}
+
+function shuffleList(items) {
+  const next = [...items];
+  for (let i = next.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [next[i], next[j]] = [next[j], next[i]];
+  }
+  return next;
+}
+
+function buildSelectedConversationWithReply(record, selectedContent) {
+  const conversation = Array.isArray(record?.contextMessages)
+    ? record.contextMessages.filter((item) => item.role !== "system" && item.content)
+    : [];
+  if (record?.userText) conversation.push({ role: "user", content: record.userText });
+  return { conversation, roleReply: selectedContent || "" };
+}
+
+function buildInspirationRecord({ record, prompt, resultA, resultB }) {
+  const config = readConfigFromInputs();
+  const role = getSelectedRole();
+  const optionsA = parseInspirationOptions(resultA.content);
+  const optionsB = parseInspirationOptions(resultB.content);
+  const fallback = (source) => source === "a" ? resultA.content : resultB.content;
+  const options = {
+    a1: { source: "a", model: config.modelA, content: optionsA[0] || fallback("a") || "（暂无候选）" },
+    a2: { source: "a", model: config.modelA, content: optionsA[1] || optionsA[0] || fallback("a") || "（暂无候选）" },
+    b1: { source: "b", model: config.modelB, content: optionsB[0] || fallback("b") || "（暂无候选）" },
+    b2: { source: "b", model: config.modelB, content: optionsB[1] || optionsB[0] || fallback("b") || "（暂无候选）" },
+  };
+
+  return {
+    id: createId("rec"),
+    kind: "inspiration",
+    action: "inspiration",
+    workspaceId: state.workspaceId,
+    projectId: state.projectId,
+    experimentId: state.experimentId,
+    linkedRunId: state.linkedRunId,
+    reportId: state.reportId,
+    createdAt: Date.now(),
+    sessionId: state.sessionId,
+    turnId: createId("insp-turn"),
+    inspirationId: createId("insp"),
+    afterTurnId: record.turnId,
+    turnOrder: record.turnOrder + 0.01,
+    selected: "",
+    selectedModel: "",
+    selectedOptionId: "",
+    used: false,
+    edited: false,
+    finalUserText: "",
+    displayOrder: shuffleList(["a1", "a2", "b1", "b2"]),
+    roleId: role ? role.id : "",
+    roleName: role ? role.nickname : "",
+    systemPrompt: prompt,
+    temperature: config.temperature,
+    userText: record.userText,
+    contextMessages: [{ role: "system", content: prompt }],
+    options,
+    apiA: {
+      endpointHost: parseHost(config.endpointA),
+      model: config.modelA,
+      ok: resultA.ok,
+      latencyMs: resultA.latencyMs,
+      ttftMs: resultA.ttftMs,
+      tps: resultA.tps,
+      outputTokens: resultA.outputTokens,
+      outputChars: resultA.outputChars,
+      tokenSource: resultA.tokenSource,
+      content: resultA.content,
+    },
+    apiB: {
+      endpointHost: parseHost(config.endpointB),
+      model: config.modelB,
+      ok: resultB.ok,
+      latencyMs: resultB.latencyMs,
+      ttftMs: resultB.ttftMs,
+      tps: resultB.tps,
+      outputTokens: resultB.outputTokens,
+      outputChars: resultB.outputChars,
+      tokenSource: resultB.tokenSource,
+      content: resultB.content,
+    },
+  };
+}
+
+function syncInspirationHistory(updated) {
+  const idx = state.history.findIndex((item) => item.type === "inspiration" && item.id === updated.id);
+  const historyRow = {
+    type: "inspiration",
+    id: updated.id,
+    afterTurnId: updated.afterTurnId,
+    options: updated.options,
+    displayOrder: updated.displayOrder,
+    selectedOptionId: updated.selectedOptionId,
+    selectedModel: updated.selectedModel,
+    used: !!updated.used,
+    edited: !!updated.edited,
+    finalUserText: updated.finalUserText || "",
+  };
+  if (idx >= 0) state.history[idx] = historyRow;
+  else state.history.push(historyRow);
+}
+
+function selectInspirationOption(optionId) {
+  const row = state.activeInspiration;
+  const option = getInspirationOption(row, optionId);
+  if (!row || !option) return;
+  if (state.selectedInspiration?.optionId === optionId) {
+    state.selectedInspiration = null;
+    renderInspirationPanel();
+    el.userInput.focus();
+    return;
+  }
+  state.selectedInspiration = { optionId, source: option.source, model: option.model, originalText: option.content };
+  el.userInput.value = option.content;
+  updateComposerHeight();
+  renderInspirationPanel();
+  el.userInput.focus();
+}
+
+async function generateInspirationForTurn(record, selectedContent) {
+  if (!state.inspirationEnabled || !record) return;
+  const config = readConfigFromInputs();
+  const { conversation, roleReply } = buildSelectedConversationWithReply(record, selectedContent);
+  const prompt = buildInspirationPrompt({ role: getSelectedRole(), roleReply, conversation });
+  const messages = [{ role: "user", content: prompt }];
+
+  state.inspirationLoading = true;
+  renderInspirationPanel();
+  setStatus("正在生成回复灵感...", "warn");
+
+  try {
+    const [resultA, resultB] = await Promise.all([
+      requestOne({ endpoint: config.endpointA, apiKey: config.apiKeyA, model: config.modelA, messages, temperature: config.temperature, sourceTag: "a", side: "a" }),
+      requestOne({ endpoint: config.endpointB, apiKey: config.apiKeyB, model: config.modelB, messages, temperature: config.temperature, sourceTag: "b", side: "b" }),
+    ]);
+
+    const inspiration = buildInspirationRecord({ record, prompt, resultA, resultB });
+    const saved = await appendRecord(inspiration);
+    state.activeInspiration = saved;
+    state.selectedInspiration = null;
+    syncInspirationHistory(saved);
+    await Promise.all([refreshStats({ silent: true }), persistSession()]);
+    setStatus("灵感已生成，可选择一条填入输入框。", "ok");
+  } finally {
+    state.inspirationLoading = false;
+    renderInspirationPanel();
+    renderTimeline();
+  }
+}
+
+async function updateInspirationUsage(userText) {
+  const row = state.activeInspiration;
+  if (!row?.id) return;
+
+  const selected = state.selectedInspiration;
+  const patch = selected
+    ? {
+        used: true,
+        selectedOptionId: selected.optionId,
+        selected: selected.source,
+        selectedModel: selected.model,
+        finalUserText: userText,
+        edited: normalizeForCompare(userText) !== normalizeForCompare(selected.originalText),
+      }
+    : {
+        used: false,
+        selectedOptionId: "",
+        selected: "",
+        selectedModel: "",
+        finalUserText: userText,
+        edited: false,
+      };
+
+  const updated = await patchRecord(row.id, patch);
+  syncInspirationHistory(updated);
+  state.activeInspiration = null;
+  state.selectedInspiration = null;
+  renderInspirationPanel();
+}
+
 // ── User actions ─────────────────────────────────────────────────────────────
 
 async function sendUserTurn() {
@@ -1279,6 +1687,13 @@ async function sendUserTurn() {
   persistConfig();
   if (!state.sessionSystemPrompt) {
     state.sessionSystemPrompt = buildRoleSystemPrompt(getSelectedRole(), config.systemPrompt);
+  }
+  try {
+    await updateInspirationUsage(userText);
+  } catch (error) {
+    console.error("Inspiration update failed:", error);
+    setStatus("灵感记录保存失败，请稍后重试。", "err");
+    return;
   }
   const messages = buildRequestMessages(userText);
   const temperature = clampTemperature(Number(config.temperature));
@@ -1332,6 +1747,7 @@ async function chooseTurn(sourceTag) {
 
   const record = buildTurnRecord("vote", sourceTag);
   if (!record) return;
+  const selectedContent = selected.content || "";
 
   setBusy(true);
   try {
@@ -1351,6 +1767,9 @@ async function chooseTurn(sourceTag) {
     renderComparePanel();
     setStatus(`已选择 ${record.selectedModel || sourceTag.toUpperCase()}，已保存。`, "ok");
     await Promise.all([refreshStats({ silent: true }), persistSession()]);
+    if (state.inspirationEnabled) {
+      await generateInspirationForTurn(record, selectedContent);
+    }
   } catch (error) {
     console.error("Vote append failed:", error);
     setStatus("保存失败，请检查服务后重试。", "err");
@@ -1381,11 +1800,15 @@ async function discardTurn() {
 function clearChat() {
   state.history = [];
   state.pendingTurn = null;
+  state.activeInspiration = null;
+  state.selectedInspiration = null;
+  state.inspirationLoading = false;
   state.loading = false;
   state.loadingUserText = "";
   startNewSession();
   renderTimeline();
   renderComparePanel();
+  renderInspirationPanel();
   setBusy(false);
   setStatus("已新建对话。", "ok");
 }
@@ -1422,6 +1845,12 @@ function bindEvents() {
     void chooseTurn(state.pendingTurn.displayOrder[1]);
   });
   el.discardTurnBtn.addEventListener("click", () => void discardTurn());
+  el.inspirationToggleBtn.addEventListener("click", () => {
+    state.inspirationEnabled = !state.inspirationEnabled;
+    localStorage.setItem(LS_KEY_INSPIRATION, state.inspirationEnabled ? "1" : "0");
+    updateInspirationToggle();
+    setStatus(state.inspirationEnabled ? "灵感模式已开启，将从下一次选择胜者后生成。" : "灵感模式已关闭。", "ok");
+  });
 
   el.userInput.addEventListener("input", updateComposerHeight);
   el.userInput.addEventListener("keydown", (e) => {
@@ -1479,6 +1908,7 @@ async function loadRoles() {
 
 async function init() {
   hydratePlatformContext();
+  state.inspirationEnabled = localStorage.getItem(LS_KEY_INSPIRATION) === "1";
   startNewSession();
   setBusy(true);
   setStatus("初始化中...", "warn");
@@ -1504,6 +1934,8 @@ async function init() {
     bindEvents();
     renderTimeline();
     renderComparePanel();
+    updateInspirationToggle();
+    renderInspirationPanel();
     await refreshStats({ silent: true });
     persistConfig();
 

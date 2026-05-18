@@ -61,6 +61,15 @@
     .perf-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
     .perf-table tr:last-child td { border-bottom: none; }
     .perf-note { font-size: .75rem; color: var(--text-soft); padding: 0 16px 12px; }
+    .inspiration-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; padding: 14px 16px; }
+    .inspiration-stat { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; background: #fafcff; }
+    .inspiration-stat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.1; }
+    .inspiration-stat-label { font-size: .74rem; color: var(--text-soft); margin-top: 3px; }
+    .inspiration-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .inspiration-choice { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; background: #fff; font-size: .82rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+    .inspiration-choice.chosen { border-color: var(--accent); background: var(--accent-light); }
+    .inspiration-choice-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; font-size: .72rem; color: var(--text-soft); font-weight: 700; }
+    .inspiration-final { margin: 0; font-size: .78rem; color: var(--text-soft); padding: 6px 8px; background: #f7f9fd; border-radius: var(--radius-sm); border: 1px solid var(--line); white-space: pre-wrap; }
 
     .section-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); overflow: hidden; }
     .section-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 8px; }
@@ -142,6 +151,7 @@
     @media (max-width: 700px) {
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
       .turn-compare-grid { grid-template-columns: 1fr; }
+      .inspiration-detail-grid { grid-template-columns: 1fr; }
       .model-name { min-width: 100px; max-width: 140px; }
       .filter-controls { gap: 8px; }
       .filter-item select, .filter-item input[type="date"] { min-width: 120px; }
@@ -223,6 +233,14 @@
       </div>
       <div class="perf-wrap" id="perfTableBody"><p class="empty-state" style="padding:12px 0">暂无速度数据</p></div>
       <p class="perf-note">统计口径：仅包含调用成功（ok=true）的模型响应。TPS 由 tokens / (总耗时 - TTFT) 计算。</p>
+    </div>
+
+    <div class="section-card">
+      <div class="section-head">
+        <h2>灵感统计</h2>
+      </div>
+      <div class="inspiration-stats" id="inspirationStatsBody"></div>
+      <p class="perf-note">统计口径：仅包含灵感模式生成的候选，不计入上方普通 A/B 胜率。</p>
     </div>
 
     <div class="section-card">
@@ -492,6 +510,7 @@
 
       for (const r of records) {
         if (r.sessionId) sessions.add(r.sessionId);
+        if (r.action === "inspiration" || r.kind === "inspiration") continue;
 
         const perfResponses = [r.apiA, r.apiB];
         for (const api of perfResponses) {
@@ -568,6 +587,36 @@
         avgTtftMs: ttftSamples ? ttftSum / ttftSamples : null,
         avgTps: tpsSamples ? tpsSum / tpsSamples : null,
         perfRows,
+      };
+    }
+
+    function buildInspirationStats(records) {
+      const items = records.filter((record) => record.action === "inspiration" || record.kind === "inspiration");
+      const selectedByModel = new Map();
+      let used = 0;
+      let edited = 0;
+      let manualAfter = 0;
+
+      for (const item of items) {
+        if (item.used) {
+          used += 1;
+          if (item.edited) edited += 1;
+          const model = item.selectedModel || "未知模型";
+          selectedByModel.set(model, (selectedByModel.get(model) || 0) + 1);
+        } else if (item.finalUserText) {
+          manualAfter += 1;
+        }
+      }
+
+      return {
+        total: items.length,
+        used,
+        edited,
+        manualAfter,
+        useRate: items.length ? used / items.length : 0,
+        selectedRows: [...selectedByModel.entries()]
+          .map(([model, count]) => ({ model, count }))
+          .sort((a, b) => b.count - a.count || a.model.localeCompare(b.model)),
       };
     }
 
@@ -702,12 +751,45 @@
       el.innerHTML = html;
     }
 
+    function renderInspirationStats(stats) {
+      const el = document.getElementById("inspirationStatsBody");
+      const topModel = stats.selectedRows[0];
+      el.innerHTML = `
+        <div class="inspiration-stat">
+          <div class="inspiration-stat-value">${stats.total}</div>
+          <div class="inspiration-stat-label">生成轮次</div>
+        </div>
+        <div class="inspiration-stat">
+          <div class="inspiration-stat-value">${stats.used}</div>
+          <div class="inspiration-stat-label">被采用</div>
+        </div>
+        <div class="inspiration-stat">
+          <div class="inspiration-stat-value">${Math.round(stats.useRate * 100)}%</div>
+          <div class="inspiration-stat-label">采用率</div>
+        </div>
+        <div class="inspiration-stat">
+          <div class="inspiration-stat-value">${stats.edited}</div>
+          <div class="inspiration-stat-label">采用后编辑</div>
+        </div>
+        <div class="inspiration-stat">
+          <div class="inspiration-stat-value">${stats.manualAfter}</div>
+          <div class="inspiration-stat-label">生成后手写</div>
+        </div>
+        <div class="inspiration-stat">
+          <div class="inspiration-stat-value" title="${esc(topModel?.model || "")}">${topModel ? esc(shortText(topModel.model, 18)) : "—"}</div>
+          <div class="inspiration-stat-label">最高采用模型${topModel ? ` · ${topModel.count} 次` : ""}</div>
+        </div>
+      `;
+    }
+
     function renderStatsPanels() {
-      const stats = buildMatchStats(getStatsRecords());
+      const records = getStatsRecords();
+      const stats = buildMatchStats(records);
       renderKpi(stats);
       renderRanking(stats);
       renderMatrix(stats);
       renderPerfTable(stats);
+      renderInspirationStats(buildInspirationStats(records));
     }
 
     // ── 对话列表 ──────────────────────────────────────────
@@ -912,6 +994,35 @@
       }
 
       for (const rec of recs.sort((a, b) => a.turnOrder - b.turnOrder)) {
+        if (rec.action === "inspiration" || rec.kind === "inspiration") {
+          const block = document.createElement("div");
+          block.className = "turn-block";
+          const order = Array.isArray(rec.displayOrder) && rec.displayOrder.length === 4
+            ? rec.displayOrder
+            : ["a1", "a2", "b1", "b2"];
+          block.innerHTML = `
+            <div class="turn-skip-note">灵感模式 · ${rec.used ? "用户采用了候选" : rec.finalUserText ? "用户最终手写回复" : "尚未使用"}</div>
+            <div class="inspiration-detail-grid">
+              ${order.map((optionId) => {
+                const option = rec.options?.[optionId] || {};
+                const chosen = rec.selectedOptionId === optionId;
+                return `
+                  <div class="inspiration-choice${chosen ? " chosen" : ""}">
+                    <div class="inspiration-choice-head">
+                      <span>${esc(String(option.source || "").toUpperCase())} · ${esc(option.model || "未知模型")}</span>
+                      ${chosen ? `<span>已选</span>` : ""}
+                    </div>
+                    ${esc(option.content || "（空候选）")}
+                  </div>
+                `;
+              }).join("")}
+            </div>
+            ${rec.finalUserText ? `<p class="inspiration-final">最终发送：${esc(rec.finalUserText)}${rec.edited ? "\n（已编辑）" : ""}</p>` : ""}
+          `;
+          body.appendChild(block);
+          continue;
+        }
+
         const userEl = document.createElement("article");
         userEl.className = "msg user";
         userEl.innerHTML = `<div class="msg-meta"><span>用户</span></div><div class="msg-bubble">${esc(rec.userText)}</div>`;

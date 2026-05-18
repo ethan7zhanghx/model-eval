@@ -126,6 +126,12 @@ button:disabled {
   box-shadow: var(--shadow-sm);
 }
 
+.inspiration-toggle[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-light);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
 .primary {
   background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
   color: #fff;
@@ -526,6 +532,65 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
+}
+
+.inspiration-panel {
+  background: rgba(255,255,255,.94);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 10px 12px;
+}
+
+.inspiration-panel.hidden {
+  display: none;
+}
+
+.inspiration-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--text-soft);
+  font-size: .8rem;
+  font-weight: 600;
+}
+
+.inspiration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.inspiration-option {
+  text-align: left;
+  white-space: normal;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--text);
+  padding: 9px 10px;
+  line-height: 1.55;
+  font-size: .84rem;
+}
+
+.inspiration-option:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  box-shadow: var(--shadow-sm);
+}
+
+.inspiration-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+.inspiration-source {
+  display: inline-flex;
+  margin-bottom: 4px;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: .72rem;
 }
 
 .composer {

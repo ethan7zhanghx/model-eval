@@ -77,8 +77,22 @@ function toSafeNonNegativeInt(value) {
 
 function normalizeAction(value) {
   const action = toSafeString(value, 40) || "unknown";
-  if (["vote", "discard", "clear", "unknown"].includes(action)) return action;
+  if (["vote", "discard", "clear", "inspiration", "unknown"].includes(action)) return action;
   return "unknown";
+}
+
+function normalizeInspirationOptions(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const normalized = {};
+  for (const key of ["a1", "a2", "b1", "b2"]) {
+    const item = raw[key] && typeof raw[key] === "object" ? raw[key] : {};
+    normalized[key] = {
+      source: key.startsWith("a") ? "a" : "b",
+      model: toSafeString(item.model, 200),
+      content: toSafeText(item.content, 30000),
+    };
+  }
+  return normalized;
 }
 
 function normalizeRecord(item) {
@@ -97,16 +111,27 @@ function normalizeRecord(item) {
     reportId: toSafeString(item.reportId, 120),
     createdAt: createdAt || Date.now(),
     action: normalizeAction(item.action),
+    kind: toSafeString(item.kind, 40) || (normalizeAction(item.action) === "inspiration" ? "inspiration" : "duel"),
     sessionId: toSafeString(item.sessionId, 120),
     turnId: toSafeString(item.turnId, 120),
+    inspirationId: toSafeString(item.inspirationId, 120),
+    afterTurnId: toSafeString(item.afterTurnId, 120),
     turnOrder: toSafeNumber(item.turnOrder) || 0,
     selected: ["a", "b", ""].includes(toSafeString(item.selected, 1)) ? toSafeString(item.selected, 1) : "",
     selectedModel: toSafeString(item.selectedModel, 200),
     displayOrder: (() => {
       const order = Array.isArray(item.displayOrder) ? item.displayOrder : [];
+      const inspirationKeys = ["a1", "a2", "b1", "b2"];
+      const validInspiration = order.filter((v) => inspirationKeys.includes(v));
+      if (validInspiration.length === 4) return validInspiration;
       const valid = order.filter((v) => v === "a" || v === "b");
       return valid.length === 2 ? valid : ["a", "b"];
     })(),
+    selectedOptionId: toSafeString(item.selectedOptionId, 20),
+    used: !!item.used,
+    edited: !!item.edited,
+    finalUserText: toSafeText(item.finalUserText, 30000),
+    options: normalizeInspirationOptions(item.options),
     systemPrompt: toSafeText(item.systemPrompt, 12000),
     contextMessages: Array.isArray(item.contextMessages)
       ? item.contextMessages.slice(0, 200).map((m) => ({
@@ -169,6 +194,7 @@ function buildSummary(items) {
 
   for (const item of items) {
     if (item.sessionId) sessions.add(item.sessionId);
+    if (item.action === "inspiration" || item.kind === "inspiration") continue;
 
     const responses = [item.apiA, item.apiB];
     for (const api of responses) {
@@ -252,6 +278,26 @@ async function appendRecord(record) {
   return normalized;
 }
 
+async function updateRecord(id, patch) {
+  const records = await readRecords(MAX_STORED_RECORDS);
+  const idx = records.findIndex((record) => record.id === id);
+  if (idx < 0) {
+    throw createError("Record not found", "RECORD_NOT_FOUND", 404);
+  }
+
+  const updated = normalizeRecord({ ...records[idx], ...patch, id });
+  const next = records.slice();
+  next[idx] = updated;
+
+  const redis = getRedis();
+  await redis.del(RECORDS_KEY);
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    await redis.lpush(RECORDS_KEY, JSON.stringify(next[i]));
+  }
+  await redis.ltrim(RECORDS_KEY, 0, MAX_STORED_RECORDS - 1);
+  return updated;
+}
+
 async function clearRecords() {
   const redis = getRedis();
   await redis.del(RECORDS_KEY);
@@ -294,6 +340,25 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    if (req.method === "PATCH") {
+      let body;
+      try {
+        body = parseBody(req);
+      } catch (error) {
+        sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) });
+        return;
+      }
+
+      const id = toSafeString(body?.id, 120);
+      if (!id) {
+        sendJson(res, 400, { error: "id required" });
+        return;
+      }
+      const item = await updateRecord(id, body?.patch || {});
+      sendJson(res, 200, { storage: "vercel-kv", item });
+      return;
+    }
+
     if (req.method === "DELETE") {
       await clearRecords();
       sendJson(res, 200, { storage: "vercel-kv", ok: true });
@@ -311,7 +376,7 @@ module.exports = async function handler(req, res) {
       return;
     }
 
-    if (error && typeof error === "object" && error.code === "INVALID_RECORD") {
+    if (error && typeof error === "object" && ["INVALID_RECORD", "RECORD_NOT_FOUND"].includes(error.code)) {
       sendJson(res, error.status || 400, {
         error: "Invalid record",
         code: error.code,

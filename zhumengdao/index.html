@@ -18,6 +18,7 @@
         <h1>筑梦岛</h1>
       </div>
       <div class="header-actions">
+        <button id="inspirationToggleBtn" type="button" class="ghost-btn inspiration-toggle" aria-pressed="false">灵感关</button>
         <button id="historyBtn" type="button" class="ghost-btn"><span class="btn-label-full">历史对话</span><span class="btn-label-short">历史</span></button>
         <button id="clearChatBtn" type="button" class="ghost-btn"><span class="btn-label-full">新建对话</span><span class="btn-label-short">新建</span></button>
         <button id="openSettingsBtn" type="button" class="ghost-btn">⚙ 设置</button>
@@ -56,6 +57,7 @@
     </main>
 
     <footer class="composer-zone">
+      <section id="inspirationPanel" class="inspiration-panel hidden" aria-live="polite"></section>
       <div class="composer">
         <textarea id="userInput" rows="1"></textarea>
         <button id="sendBtn" type="button" class="send-btn primary">发送</button>
