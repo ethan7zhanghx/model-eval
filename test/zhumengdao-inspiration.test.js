@@ -40,6 +40,9 @@ test('zhumengdao inspiration mode has chat UI and persistence contracts', async 
   assert.match(stats, /灵感速度统计/);
   assert.match(stats, /inspirationMatrixBody/);
   assert.match(stats, /inspirationPerfTableBody/);
+  assert.match(stats, /grid-template-columns:\s*28px minmax\(180px, 1fr\) minmax\(120px, 180px\) 132px/);
+  assert.match(stats, /style="width:\$\{wr\}%"/);
+  assert.doesNotMatch(stats, /s \/ maxScore \* 100/);
   assert.doesNotMatch(stats, /采用后编辑/);
   assert.doesNotMatch(stats, /采用率/);
 });

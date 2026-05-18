@@ -33,16 +33,16 @@
     /* Ranking */
     .ranking-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: 16px 18px; box-shadow: var(--shadow-sm); }
     .ranking-card h2 { margin: 0 0 14px; font-size: .85rem; font-weight: 700; color: var(--text-soft); text-transform: uppercase; letter-spacing: .04em; }
-    .rank-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .rank-row { display: grid; grid-template-columns: 28px minmax(180px, 1fr) minmax(120px, 180px) 132px; align-items: center; gap: 10px; margin-bottom: 10px; }
     .rank-row:last-child { margin-bottom: 0; }
     .rank-num { font-size: .85rem; font-weight: 700; color: var(--text-soft); width: 24px; text-align: center; flex-shrink: 0; }
     .rank-num.gold { color: #b45309; }
     .rank-num.silver { color: #64748b; }
     .rank-num.bronze { color: #92400e; }
-    .rank-model { font-size: .82rem; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .rank-bar-track { width: 140px; height: 16px; background: var(--bg); border-radius: 999px; overflow: hidden; flex-shrink: 0; }
+    .rank-model { font-size: .82rem; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rank-bar-track { width: 100%; height: 16px; background: var(--bg); border-radius: 999px; overflow: hidden; }
     .rank-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); transition: width .4s ease; }
-    .rank-score { font-size: .78rem; color: var(--text-soft); white-space: nowrap; min-width: 100px; text-align: right; flex-shrink: 0; }
+    .rank-score { font-size: .78rem; color: var(--text-soft); white-space: nowrap; text-align: right; }
 
     /* Matrix */
     .matrix-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); overflow: hidden; }
@@ -885,11 +885,9 @@
       }
       const scores = bradleyTerry(stats.models, stats.wins, stats.games);
       const ranked = [...stats.models].sort((a, b) => scores[b] - scores[a]);
-      const maxScore = Math.max(...Object.values(scores), 1);
       const medals = ["gold", "silver", "bronze"];
 
       el.innerHTML = ranked.map((m, i) => {
-        const s = scores[m];
         const totalWins = stats.models.reduce((acc, j) => acc + (j !== m ? (stats.wins[m]?.[j] || 0) : 0), 0);
         const totalGames = stats.models.reduce((acc, j) => acc + (j !== m ? (stats.games[m]?.[j] || 0) : 0), 0);
         const wr = totalGames ? Math.round(totalWins / totalGames * 100) : 0;
@@ -897,7 +895,7 @@
           <div class="rank-row">
             <div class="rank-num ${medals[i] || ""}">${i + 1}</div>
             <div class="rank-model" title="${esc(m)}">${esc(m)}</div>
-            <div class="rank-bar-track"><div class="rank-bar-fill" style="width:${Math.round(s / maxScore * 100)}%"></div></div>
+            <div class="rank-bar-track" title="条形显示总体胜率"><div class="rank-bar-fill" style="width:${wr}%"></div></div>
             <div class="rank-score">${totalWins}胜/${totalGames}场 · ${wr}%</div>
           </div>`;
       }).join("");
