@@ -279,23 +279,29 @@ async function appendRecord(record) {
 }
 
 async function updateRecord(id, patch) {
-  const records = await readRecords(MAX_STORED_RECORDS);
-  const idx = records.findIndex((record) => record.id === id);
-  if (idx < 0) {
+  const redis = getRedis();
+  const list = await redis.lrange(RECORDS_KEY, 0, MAX_STORED_RECORDS - 1);
+  if (!Array.isArray(list)) {
     throw createError("Record not found", "RECORD_NOT_FOUND", 404);
   }
 
-  const updated = normalizeRecord({ ...records[idx], ...patch, id });
-  const next = records.slice();
-  next[idx] = updated;
+  for (let idx = 0; idx < list.length; idx += 1) {
+    const raw = list[idx];
+    if (typeof raw !== "string") continue;
+    let existing = null;
+    try {
+      existing = normalizeRecord(JSON.parse(raw));
+    } catch {
+      continue;
+    }
+    if (!existing || existing.id !== id) continue;
 
-  const redis = getRedis();
-  await redis.del(RECORDS_KEY);
-  for (let i = next.length - 1; i >= 0; i -= 1) {
-    await redis.lpush(RECORDS_KEY, JSON.stringify(next[i]));
+    const updated = normalizeRecord({ ...existing, ...patch, id });
+    await redis.lset(RECORDS_KEY, idx, JSON.stringify(updated));
+    return updated;
   }
-  await redis.ltrim(RECORDS_KEY, 0, MAX_STORED_RECORDS - 1);
-  return updated;
+
+  throw createError("Record not found", "RECORD_NOT_FOUND", 404);
 }
 
 async function clearRecords() {
