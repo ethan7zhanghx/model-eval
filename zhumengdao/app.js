@@ -907,11 +907,9 @@ function renderInspirationPanel() {
       ${order.map((optionId) => {
         const option = row.options[optionId] || {};
         const chosen = selectedId === optionId;
-        const source = `${String(option.source || "").toUpperCase()} · ${option.model || "未知模型"}`;
         return `
           <button class="inspiration-option${chosen ? " selected" : ""}" type="button" data-option-id="${escapeHtml(optionId)}">
             <span>${escapeHtml(option.content || "（空候选）")}</span>
-            ${chosen ? `<span class="inspiration-source">${escapeHtml(source)}</span>` : ""}
           </button>
         `;
       }).join("")}
@@ -1661,11 +1659,16 @@ async function updateInspirationUsage(userText) {
         edited: false,
       };
 
-  const updated = await patchRecord(row.id, patch);
-  syncInspirationHistory(updated);
+  const optimistic = { ...row, ...patch };
+  syncInspirationHistory(optimistic);
   state.activeInspiration = null;
   state.selectedInspiration = null;
   renderInspirationPanel();
+  renderTimeline();
+
+  const updated = await patchRecord(row.id, patch);
+  syncInspirationHistory(updated);
+  renderTimeline();
 }
 
 // ── User actions ─────────────────────────────────────────────────────────────
@@ -1688,13 +1691,9 @@ async function sendUserTurn() {
   if (!state.sessionSystemPrompt) {
     state.sessionSystemPrompt = buildRoleSystemPrompt(getSelectedRole(), config.systemPrompt);
   }
-  try {
-    await updateInspirationUsage(userText);
-  } catch (error) {
+  void updateInspirationUsage(userText).catch((error) => {
     console.error("Inspiration update failed:", error);
-    setStatus("灵感记录保存失败，请稍后重试。", "err");
-    return;
-  }
+  });
   const messages = buildRequestMessages(userText);
   const temperature = clampTemperature(Number(config.temperature));
   el.temperatureInput.value = String(temperature);

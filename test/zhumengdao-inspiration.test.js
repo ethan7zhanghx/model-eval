@@ -21,6 +21,8 @@ test('zhumengdao inspiration mode has chat UI and persistence contracts', async 
   assert.match(app, /function updateInspirationUsage/);
   assert.match(app, /kind:\s*"inspiration"/);
   assert.match(recordsApi, /normalizeInspirationOptions/);
+  assert.match(recordsApi, /redis\.lset\(RECORDS_KEY/);
+  assert.doesNotMatch(recordsApi, /await redis\.del\(RECORDS_KEY\);\n\s*for \(let i = next\.length - 1/);
   assert.match(server, /normalizeInspirationOptions/);
   assert.match(stats, /function buildInspirationStats/);
   assert.match(stats, /灵感统计/);
