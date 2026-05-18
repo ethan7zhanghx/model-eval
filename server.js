@@ -133,8 +133,22 @@ function toSafeNonNegativeInt(value) {
 
 function normalizeZmdAction(value) {
   const action = toSafeString(value, 40) || "unknown";
-  if (["vote", "discard", "clear", "unknown"].includes(action)) return action;
+  if (["vote", "discard", "clear", "inspiration", "unknown"].includes(action)) return action;
   return "unknown";
+}
+
+function normalizeInspirationOptions(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const normalized = {};
+  for (const key of ["a1", "a2", "b1", "b2"]) {
+    const item = raw[key] && typeof raw[key] === "object" ? raw[key] : {};
+    normalized[key] = {
+      source: key.startsWith("a") ? "a" : "b",
+      model: toSafeString(item.model, 200),
+      content: toSafeText(item.content, 30000),
+    };
+  }
+  return normalized;
 }
 
 function normalizeZmdRecord(item) {
@@ -153,16 +167,27 @@ function normalizeZmdRecord(item) {
     reportId: toSafeString(item.reportId, 120),
     createdAt: createdAt || Date.now(),
     action: normalizeZmdAction(item.action),
+    kind: toSafeString(item.kind, 40) || (normalizeZmdAction(item.action) === "inspiration" ? "inspiration" : "duel"),
     sessionId: toSafeString(item.sessionId, 120),
     turnId: toSafeString(item.turnId, 120),
+    inspirationId: toSafeString(item.inspirationId, 120),
+    afterTurnId: toSafeString(item.afterTurnId, 120),
     turnOrder: toSafeNumber(item.turnOrder) || 0,
     selected: ["a", "b", ""].includes(toSafeString(item.selected, 1)) ? toSafeString(item.selected, 1) : "",
     selectedModel: toSafeString(item.selectedModel, 200),
     displayOrder: (() => {
       const order = Array.isArray(item.displayOrder) ? item.displayOrder : [];
+      const inspirationKeys = ["a1", "a2", "b1", "b2"];
+      const validInspiration = order.filter((v) => inspirationKeys.includes(v));
+      if (validInspiration.length === 4) return validInspiration;
       const valid = order.filter((v) => v === "a" || v === "b");
       return valid.length === 2 ? valid : ["a", "b"];
     })(),
+    selectedOptionId: toSafeString(item.selectedOptionId, 20),
+    used: !!item.used,
+    edited: !!item.edited,
+    finalUserText: toSafeText(item.finalUserText, 30000),
+    options: normalizeInspirationOptions(item.options),
     systemPrompt: toSafeText(item.systemPrompt, 12000),
     contextMessages: Array.isArray(item.contextMessages)
       ? item.contextMessages.slice(0, 200).map((m) => ({
@@ -225,6 +250,7 @@ function buildZmdSummary(items) {
 
   for (const item of items) {
     if (item.sessionId) sessions.add(item.sessionId);
+    if (item.action === "inspiration" || item.kind === "inspiration") continue;
 
     const responses = [item.apiA, item.apiB];
     for (const api of responses) {
@@ -882,6 +908,34 @@ async function handleZmdRecordsApi(req, res, urlObj) {
     const records = await readZmdRecords();
     records.unshift(item);
     await writeZmdRecords(records.slice(0, MAX_ZMD_RECORDS));
+    sendJson(res, 200, { storage: "local-file", item });
+    return;
+  }
+
+  if (req.method === "PATCH") {
+    let body;
+    try {
+      body = await parseJsonBody(req);
+    } catch (error) {
+      sendJson(res, 400, { error: "Invalid JSON body", detail: String(error) });
+      return;
+    }
+
+    const id = toSafeString(body?.id, 120);
+    if (!id) {
+      sendJson(res, 400, { error: "id required" });
+      return;
+    }
+
+    const records = await readZmdRecords();
+    const idx = records.findIndex((record) => record.id === id);
+    if (idx < 0) {
+      sendJson(res, 404, { error: "Record not found" });
+      return;
+    }
+    const item = normalizeZmdRecord({ ...records[idx], ...(body?.patch || {}), id });
+    records[idx] = item;
+    await writeZmdRecords(records);
     sendJson(res, 200, { storage: "local-file", item });
     return;
   }
