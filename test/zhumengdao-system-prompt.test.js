@@ -13,6 +13,8 @@ test('zhumengdao exposes configurable system prompt controls', async () => {
 
   assert.match(html, /id="systemPromptInput"/);
   assert.match(app, /DEFAULT_SYSTEM_PROMPT/);
+  assert.match(app, /动作、表情、神态、心理活动等旁白请放在中文括号（）中/);
+  assert.match(app, /LEGACY_SYSTEM_PROMPT_DEFAULTS/);
   assert.match(app, /systemPromptInput:\s*document\.getElementById\("systemPromptInput"\)/);
   assert.match(app, /systemPrompt:\s*sanitizeSystemPrompt/);
 });
