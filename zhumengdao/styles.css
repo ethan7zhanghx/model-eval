@@ -546,6 +546,39 @@ button:disabled {
   display: none;
 }
 
+.assist-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: .84rem;
+  font-weight: 600;
+  flex-wrap: wrap;
+}
+
+.assist-action-btn {
+  font-size: .82rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  background: var(--accent-light);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.assist-action-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(13,117,110,.22);
+}
+
+.assist-action-btn.continue-action {
+  border-color: color-mix(in srgb, #0f766e 26%, var(--line));
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
 .inspiration-head {
   display: flex;
   align-items: center;
@@ -583,6 +616,38 @@ button:disabled {
 .inspiration-option.selected {
   border-color: var(--accent);
   background: var(--accent-light);
+}
+
+.continue-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.continue-option {
+  text-align: left;
+  white-space: normal;
+  border: 1px solid color-mix(in srgb, #0f766e 22%, var(--line));
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--text);
+  padding: 10px 11px;
+  line-height: 1.6;
+  font-size: .84rem;
+}
+
+.continue-option:hover:not(:disabled) {
+  border-color: #0f766e;
+  box-shadow: var(--shadow-sm);
+}
+
+.continue-timeline .msg-bubble {
+  border-color: color-mix(in srgb, #0f766e 28%, var(--line));
+  background: #ecfdf5;
+}
+
+.continue-head .inspiration-source {
+  color: #0f766e;
 }
 
 .inspiration-source {
@@ -1184,6 +1249,10 @@ details[open] summary::before {
     padding: 8px 10px 10px;
     gap: 8px;
   }
+  .inspiration-grid,
+  .continue-grid {
+    grid-template-columns: 1fr;
+  }
   .response-body {
     max-height: 20vh;
     min-height: 50px;
@@ -1250,6 +1319,10 @@ details[open] summary::before {
     grid-template-columns: 1fr;
     padding: 8px 10px 12px;
     gap: 8px;
+  }
+  .inspiration-grid,
+  .continue-grid {
+    grid-template-columns: 1fr;
   }
   .compare-header { padding: 8px 10px 6px; }
   .response-body { max-height: 22vh; min-height: 60px; }

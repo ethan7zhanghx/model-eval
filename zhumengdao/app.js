@@ -6,7 +6,6 @@ const ROLES_DATA_URL = "./roles.json";
 const LS_KEY_CONFIG = "zhumengdao-dual-chat-config-v2";
 const LS_KEY_SESSION = "zhumengdao-last-session-id";
 const LS_KEY_DEVICE = "zhumengdao-device-id";
-const LS_KEY_INSPIRATION = "zhumengdao-inspiration-enabled";
 const MAX_STATS_RECORDS = 1000;
 const DEFAULT_WORKSPACE_ID = "ws-default";
 const DEFAULT_PROJECT_ID = "proj-default";
@@ -46,8 +45,10 @@ const state = {
   pendingTurn: null,
   activeInspiration: null,
   selectedInspiration: null,
-  inspirationEnabled: false,
   inspirationLoading: false,
+  activeContinue: null,
+  continueLoading: false,
+  assistTarget: null,
   busy: false,
   loading: false,
   loadingUserText: "",
@@ -67,7 +68,6 @@ const state = {
 };
 
 const el = {
-  inspirationToggleBtn: document.getElementById("inspirationToggleBtn"),
   openSettingsBtn: document.getElementById("openSettingsBtn"),
   closeSettingsBtn: document.getElementById("closeSettingsBtn"),
   settingsPanel: document.getElementById("settingsPanel"),
@@ -195,7 +195,17 @@ function buildSessionPayload() {
     deviceId: getDeviceId(),
     messages: state.history.map((m) => {
       if (m.type === "compare") {
-        return { type: "compare", responses: m.responses, displayOrder: m.displayOrder, voted: m.voted, votedModel: m.votedModel };
+        return {
+          type: "compare",
+          recordId: m.recordId,
+          turnId: m.turnId,
+          turnOrder: m.turnOrder,
+          userText: m.userText,
+          responses: m.responses,
+          displayOrder: m.displayOrder,
+          voted: m.voted,
+          votedModel: m.votedModel,
+        };
       }
       if (m.type === "inspiration") {
         return {
@@ -209,6 +219,19 @@ function buildSessionPayload() {
           used: !!m.used,
           edited: !!m.edited,
           finalUserText: m.finalUserText || "",
+        };
+      }
+      if (m.type === "continue") {
+        return {
+          type: "continue",
+          id: m.id,
+          turnId: m.turnId,
+          afterTurnId: m.afterTurnId,
+          turnOrder: m.turnOrder,
+          responses: m.responses,
+          displayOrder: m.displayOrder,
+          selected: m.selected,
+          selectedModel: m.selectedModel,
         };
       }
       return { role: m.role, content: m.content, source: m.source, time: m.time };
@@ -241,12 +264,25 @@ function restoreSession(session, options = {}) {
   state.activeInspiration = null;
   state.selectedInspiration = null;
   state.inspirationLoading = false;
+  state.activeContinue = null;
+  state.continueLoading = false;
+  state.assistTarget = null;
   state.sessionSystemPrompt = session.systemPrompt || "";
   state.loading = false;
   state.loadingUserText = "";
   state.history = (session.messages || []).map((m) => {
     if (m.type === "compare") {
-      return { type: "compare", responses: m.responses, displayOrder: m.displayOrder, voted: m.voted, votedModel: m.votedModel };
+      return {
+        type: "compare",
+        recordId: m.recordId,
+        turnId: m.turnId,
+        turnOrder: m.turnOrder,
+        userText: m.userText,
+        responses: m.responses,
+        displayOrder: m.displayOrder,
+        voted: m.voted,
+        votedModel: m.votedModel,
+      };
     }
     if (m.type === "inspiration") {
       return {
@@ -262,10 +298,25 @@ function restoreSession(session, options = {}) {
         finalUserText: m.finalUserText || "",
       };
     }
+    if (m.type === "continue") {
+      return {
+        type: "continue",
+        id: m.id,
+        turnId: m.turnId,
+        afterTurnId: m.afterTurnId,
+        turnOrder: m.turnOrder,
+        responses: m.responses,
+        displayOrder: m.displayOrder,
+        selected: m.selected,
+        selectedModel: m.selectedModel,
+      };
+    }
     return { role: m.role, content: m.content, source: m.source, time: m.time };
   });
   const lastInspiration = [...state.history].reverse().find((m) => m.type === "inspiration" && !m.finalUserText);
   state.activeInspiration = lastInspiration || null;
+  const lastContinue = [...state.history].reverse().find((m) => m.type === "continue" && !m.selected);
+  state.activeContinue = lastContinue || null;
   if (el.systemPromptInput) {
     el.systemPromptInput.value = session.config?.systemPrompt || session.systemPrompt || DEFAULT_SYSTEM_PROMPT;
   }
@@ -536,6 +587,36 @@ function renderSessionDetail(session, turnRecords) {
           }).join("")}
         </div>
         ${rec.finalUserText ? `<div class="msg-bubble">最终发送：${escapeHtml(rec.finalUserText)}</div>` : ""}
+      `;
+      el.sessionModalBody.appendChild(block);
+      continue;
+    }
+
+    if (rec.action === "continue" || rec.kind === "continue") {
+      const block = document.createElement("div");
+      block.className = "timeline-compare continue-timeline";
+      const order = Array.isArray(rec.displayOrder) && rec.displayOrder.length === 2 ? rec.displayOrder : ["a", "b"];
+      block.innerHTML = `
+        <div class="inspiration-head continue-head">
+          <span>继续聊</span>
+          <span class="inspiration-source">${rec.selected ? "已加入对话" : "未选择"}</span>
+        </div>
+        <div class="timeline-compare-grid">
+          ${order.map((source) => {
+            const response = source === "a" ? rec.apiA : rec.apiB;
+            const chosen = rec.selected === source;
+            return `
+              <article class="tl-response-card${chosen ? " card-chosen" : rec.selected ? " card-unchosen" : ""}">
+                <div class="response-card-head">
+                  <span class="response-tag tag-${source}">${source.toUpperCase()}</span>
+                  <span class="response-latency">${escapeHtml(formatPerfText(response))}</span>
+                  ${chosen ? `<span class="tl-chosen-badge">✓ 已选</span>` : ""}
+                </div>
+                <div class="response-body">${escapeHtml(response?.content || "（无内容）")}</div>
+              </article>
+            `;
+          }).join("")}
+        </div>
       `;
       el.sessionModalBody.appendChild(block);
       continue;
@@ -821,6 +902,22 @@ function createInspirationNode(row) {
   return item;
 }
 
+function createContinueNode(row) {
+  const item = document.createElement("div");
+  item.className = "timeline-compare continue-timeline";
+  const selected = row.selected || "";
+  const selectedModel = row.selectedModel || row.responses?.[selected]?.model || selected.toUpperCase();
+  const selectedContent = row.responses?.[selected]?.content || "";
+  item.innerHTML = `
+    <div class="inspiration-head continue-head">
+      <span>继续聊</span>
+      <span class="inspiration-source">${selected ? `${escapeHtml(selected.toUpperCase())} · ${escapeHtml(selectedModel || "未知模型")}` : "未选择"}</span>
+    </div>
+    <div class="msg-bubble">${escapeHtml(selectedContent || "已生成候选，尚未选择。")}</div>
+  `;
+  return item;
+}
+
 function renderTimeline() {
   el.chatTimeline.innerHTML = "";
   updateSettingsLock();
@@ -840,6 +937,8 @@ function renderTimeline() {
       el.chatTimeline.appendChild(createCompareNode(row));
     } else if (row.type === "inspiration") {
       el.chatTimeline.appendChild(createInspirationNode(row));
+    } else if (row.type === "continue") {
+      el.chatTimeline.appendChild(createContinueNode(row));
     } else {
       el.chatTimeline.appendChild(createMessageNode(row));
     }
@@ -886,8 +985,63 @@ function renderInspirationPanel() {
     return;
   }
 
+  if (state.continueLoading) {
+    el.inspirationPanel.classList.remove("hidden");
+    el.inspirationPanel.innerHTML = `
+      <div class="inspiration-head continue-head">
+        <span>正在生成继续聊</span>
+        <span class="inspiration-source">A/B 随机展示</span>
+      </div>
+    `;
+    return;
+  }
+
   const row = state.activeInspiration;
   if (!row || !row.options) {
+    const continueRow = state.activeContinue;
+    if (continueRow?.responses) {
+      const order = Array.isArray(continueRow.displayOrder) && continueRow.displayOrder.length === 2
+        ? continueRow.displayOrder
+        : ["a", "b"];
+      el.inspirationPanel.classList.remove("hidden");
+      el.inspirationPanel.innerHTML = `
+        <div class="inspiration-head continue-head">
+          <span>继续聊候选</span>
+          <span class="inspiration-source">选择后直接进入对话</span>
+        </div>
+        <div class="continue-grid">
+          ${order.map((source) => {
+            const response = continueRow.responses[source] || {};
+            return `
+              <button class="continue-option" type="button" data-continue-source="${escapeHtml(source)}" ${response.ok ? "" : "disabled"}>
+                <span>${escapeHtml(response.content || "（空候选）")}</span>
+              </button>
+            `;
+          }).join("")}
+        </div>
+      `;
+      for (const button of el.inspirationPanel.querySelectorAll("[data-continue-source]")) {
+        button.addEventListener("click", () => chooseContinue(button.getAttribute("data-continue-source")));
+      }
+      return;
+    }
+
+    if (state.assistTarget && !state.pendingTurn && !state.busy && !state.loading) {
+      el.inspirationPanel.classList.remove("hidden");
+      el.inspirationPanel.innerHTML = `
+        <div class="assist-actions">
+          <span>想不出怎么接？</span>
+          <button type="button" class="assist-action-btn" data-assist-action="inspiration">灵感</button>
+          <button type="button" class="assist-action-btn continue-action" data-assist-action="continue">继续聊</button>
+        </div>
+      `;
+      el.inspirationPanel.querySelector('[data-assist-action="inspiration"]')
+        ?.addEventListener("click", () => generateInspirationForTurn(state.assistTarget.record, state.assistTarget.selectedContent));
+      el.inspirationPanel.querySelector('[data-assist-action="continue"]')
+        ?.addEventListener("click", () => generateContinueForLatest());
+      return;
+    }
+
     el.inspirationPanel.classList.add("hidden");
     el.inspirationPanel.innerHTML = "";
     return;
@@ -949,12 +1103,6 @@ function renderComparePanel() {
   });
 }
 
-function updateInspirationToggle() {
-  if (!el.inspirationToggleBtn) return;
-  el.inspirationToggleBtn.setAttribute("aria-pressed", state.inspirationEnabled ? "true" : "false");
-  el.inspirationToggleBtn.textContent = state.inspirationEnabled ? "灵感开" : "灵感关";
-}
-
 function updateSettingsLock() {
   const started = state.loading || state.history.length > 0 || !!state.pendingTurn || !!state.sessionSystemPrompt;
   el.roleSelect.disabled = started;
@@ -992,6 +1140,11 @@ function buildRequestMessages(userText) {
       // 把选中的那条作为 assistant 消息加入上下文
       if (item.voted) {
         const chosen = item.responses[item.voted];
+        if (chosen?.content) messages.push({ role: "assistant", content: chosen.content });
+      }
+    } else if (item.type === "continue") {
+      if (item.selected) {
+        const chosen = item.responses?.[item.selected];
         if (chosen?.content) messages.push({ role: "assistant", content: chosen.content });
       }
     } else if (item.type === "inspiration") {
@@ -1555,6 +1708,26 @@ function buildSelectedConversationWithReply(record, selectedContent) {
   return { conversation, roleReply: selectedContent || "" };
 }
 
+function buildContinuePrompt({ role }) {
+  const roleName = role?.nickname || "角色";
+  return [
+    `请继续以${roleName}的身份，承接上一条角色回复自然延续一小段。`,
+    "要求：",
+    "1. 只输出角色会继续说/做的内容，不要替 User 发言，不要描写 User 新的动作或心理。",
+    "2. 保持当前情绪、关系和场景，不要突然跳转地点、时间或重大剧情。",
+    "3. 回复保持即时聊天节奏，可以包含简短动作描写和1到2句台词。",
+    "4. 结尾留下一个 User 容易接住的互动点，但不要连续追问。",
+    "5. 不要解释你的写作意图，不要输出 JSON 或 Markdown。",
+  ].join("\n");
+}
+
+function buildContinueMessages() {
+  const messages = buildRequestMessages("");
+  messages.pop();
+  messages.push({ role: "user", content: buildContinuePrompt({ role: getSelectedRole() }) });
+  return messages;
+}
+
 function buildInspirationRecord({ record, prompt, resultA, resultB }) {
   const config = readConfigFromInputs();
   const role = getSelectedRole();
@@ -1627,6 +1800,64 @@ function buildInspirationRecord({ record, prompt, resultA, resultB }) {
   };
 }
 
+function buildContinueRecord({ prompt, resultA, resultB }) {
+  const config = readConfigFromInputs();
+  const role = getSelectedRole();
+  const target = state.assistTarget;
+  const systemPrompt = state.sessionSystemPrompt || buildRoleSystemPrompt(role, config.systemPrompt);
+  return {
+    id: createId("rec"),
+    kind: "continue",
+    action: "continue",
+    workspaceId: state.workspaceId,
+    projectId: state.projectId,
+    experimentId: state.experimentId,
+    linkedRunId: state.linkedRunId,
+    reportId: state.reportId,
+    createdAt: Date.now(),
+    sessionId: state.sessionId,
+    turnId: createId("continue-turn"),
+    afterTurnId: target?.record?.turnId || "",
+    turnOrder: state.turnOrder + 1,
+    selected: "",
+    selectedModel: "",
+    displayOrder: Math.random() < 0.5 ? ["a", "b"] : ["b", "a"],
+    roleId: role ? role.id : "",
+    roleName: role ? role.nickname : "",
+    systemPrompt,
+    temperature: config.temperature,
+    userText: "",
+    contextMessages: buildRequestMessages("")
+      .slice(0, -1)
+      .filter((m) => m.content),
+    continuePrompt: prompt,
+    apiA: {
+      endpointHost: parseHost(config.endpointA),
+      model: config.modelA,
+      ok: resultA.ok,
+      latencyMs: resultA.latencyMs,
+      ttftMs: resultA.ttftMs,
+      tps: resultA.tps,
+      outputTokens: resultA.outputTokens,
+      outputChars: resultA.outputChars,
+      tokenSource: resultA.tokenSource,
+      content: resultA.content,
+    },
+    apiB: {
+      endpointHost: parseHost(config.endpointB),
+      model: config.modelB,
+      ok: resultB.ok,
+      latencyMs: resultB.latencyMs,
+      ttftMs: resultB.ttftMs,
+      tps: resultB.tps,
+      outputTokens: resultB.outputTokens,
+      outputChars: resultB.outputChars,
+      tokenSource: resultB.tokenSource,
+      content: resultB.content,
+    },
+  };
+}
+
 function syncInspirationHistory(updated) {
   const idx = state.history.findIndex((item) => item.type === "inspiration" && item.id === updated.id);
   const historyRow = {
@@ -1640,6 +1871,23 @@ function syncInspirationHistory(updated) {
     used: !!updated.used,
     edited: !!updated.edited,
     finalUserText: updated.finalUserText || "",
+  };
+  if (idx >= 0) state.history[idx] = historyRow;
+  else state.history.push(historyRow);
+}
+
+function syncContinueHistory(updated) {
+  const idx = state.history.findIndex((item) => item.type === "continue" && item.id === updated.id);
+  const historyRow = {
+    type: "continue",
+    id: updated.id,
+    turnId: updated.turnId,
+    afterTurnId: updated.afterTurnId,
+    turnOrder: updated.turnOrder,
+    responses: { a: updated.apiA, b: updated.apiB },
+    displayOrder: updated.displayOrder,
+    selected: updated.selected,
+    selectedModel: updated.selectedModel,
   };
   if (idx >= 0) state.history[idx] = historyRow;
   else state.history.push(historyRow);
@@ -1663,7 +1911,7 @@ function selectInspirationOption(optionId) {
 }
 
 async function generateInspirationForTurn(record, selectedContent) {
-  if (!state.inspirationEnabled || !record) return;
+  if (!record || state.busy || state.inspirationLoading || state.continueLoading) return;
   const config = readConfigFromInputs();
   const { conversation, roleReply } = buildSelectedConversationWithReply(record, selectedContent);
   const prompt = buildInspirationPrompt({ role: getSelectedRole(), roleReply, conversation });
@@ -1690,6 +1938,98 @@ async function generateInspirationForTurn(record, selectedContent) {
     state.inspirationLoading = false;
     renderInspirationPanel();
     renderTimeline();
+  }
+}
+
+async function generateContinueForLatest() {
+  if (!state.assistTarget || state.busy || state.inspirationLoading || state.continueLoading) return;
+  const config = readConfigFromInputs();
+  const err = validateConfig(config);
+  if (err) { setStatus(err, "err"); return; }
+
+  const prompt = buildContinuePrompt({ role: getSelectedRole() });
+  const messages = buildContinueMessages();
+  const temperature = clampTemperature(Number(config.temperature));
+
+  state.activeInspiration = null;
+  state.selectedInspiration = null;
+  state.activeContinue = null;
+  state.continueLoading = true;
+  renderInspirationPanel();
+  setBusy(true);
+  setStatus("正在生成继续聊候选...", "warn");
+
+  try {
+    const [resultA, resultB] = await Promise.all([
+      requestOne({ endpoint: config.endpointA, apiKey: config.apiKeyA, model: config.modelA, messages, temperature, sourceTag: "a", side: "a" }),
+      requestOne({ endpoint: config.endpointB, apiKey: config.apiKeyB, model: config.modelB, messages, temperature, sourceTag: "b", side: "b" }),
+    ]);
+
+    const record = buildContinueRecord({ prompt, resultA, resultB });
+    const saved = await appendRecord(record);
+    state.activeContinue = {
+      type: "continue",
+      id: saved.id,
+      turnId: saved.turnId,
+      afterTurnId: saved.afterTurnId,
+      turnOrder: saved.turnOrder,
+      responses: { a: saved.apiA, b: saved.apiB },
+      displayOrder: saved.displayOrder,
+      selected: "",
+      selectedModel: "",
+    };
+    await refreshStats({ silent: true });
+    setStatus("继续聊已生成，请选择更好的一条。", "ok");
+  } catch (error) {
+    console.error("Continue generation failed:", error);
+    setStatus("继续聊生成失败，请稍后重试。", "err");
+  } finally {
+    state.continueLoading = false;
+    setBusy(false);
+    renderInspirationPanel();
+    renderTimeline();
+  }
+}
+
+async function chooseContinue(sourceTag) {
+  const row = state.activeContinue;
+  const selected = row?.responses?.[sourceTag];
+  if (!row?.id || !selected || !selected.ok || state.busy) return;
+
+  const patch = {
+    selected: sourceTag,
+    selectedModel: selected.model || "",
+  };
+  const optimistic = { ...row, ...patch };
+  syncContinueHistory(optimistic);
+  state.activeContinue = null;
+  state.assistTarget = {
+    record: {
+      turnId: row.turnId,
+      turnOrder: row.turnOrder,
+      contextMessages: buildRequestMessages("").slice(0, -1),
+      userText: "",
+    },
+    selectedContent: selected.content || "",
+  };
+  state.turnOrder = Math.max(state.turnOrder, Number(row.turnOrder) || state.turnOrder);
+  renderInspirationPanel();
+  renderTimeline();
+  setBusy(true);
+
+  try {
+    const updated = await patchRecord(row.id, patch);
+    syncContinueHistory(updated);
+    state.assistTarget = { record: updated, selectedContent: selected.content || "" };
+    await Promise.all([refreshStats({ silent: true }), persistSession()]);
+    setStatus(`已选择 ${patch.selectedModel || sourceTag.toUpperCase()}，继续聊已加入对话。`, "ok");
+  } catch (error) {
+    console.error("Continue selection failed:", error);
+    setStatus("继续聊记录保存失败，请稍后重试。", "err");
+  } finally {
+    setBusy(false);
+    renderTimeline();
+    renderInspirationPanel();
   }
 }
 
@@ -1748,6 +2088,8 @@ async function sendUserTurn() {
   if (!state.sessionSystemPrompt) {
     state.sessionSystemPrompt = buildRoleSystemPrompt(getSelectedRole(), config.systemPrompt);
   }
+  state.assistTarget = null;
+  state.activeContinue = null;
   void updateInspirationUsage(userText).catch((error) => {
     console.error("Inspiration update failed:", error);
   });
@@ -1812,20 +2154,22 @@ async function chooseTurn(sourceTag) {
     state.history.push({ role: "user", content: state.pendingTurn.userText, time: state.pendingTurn.time });
     state.history.push({
       type: "compare",
+      recordId: record.id,
+      turnId: record.turnId,
+      turnOrder: record.turnOrder,
+      userText: state.pendingTurn.userText,
       responses: state.pendingTurn.responses,
       displayOrder: state.pendingTurn.displayOrder,
       voted: sourceTag,
       votedModel: record.selectedModel,
     });
     state.turnOrder = state.pendingTurn.turnOrder;
+    state.assistTarget = { record, selectedContent };
     state.pendingTurn = null;
     renderTimeline();
     renderComparePanel();
     setStatus(`已选择 ${record.selectedModel || sourceTag.toUpperCase()}，已保存。`, "ok");
     await Promise.all([refreshStats({ silent: true }), persistSession()]);
-    if (state.inspirationEnabled) {
-      await generateInspirationForTurn(record, selectedContent);
-    }
   } catch (error) {
     console.error("Vote append failed:", error);
     setStatus("保存失败，请检查服务后重试。", "err");
@@ -1842,6 +2186,7 @@ async function discardTurn() {
   try {
     await appendRecord(record);
     state.pendingTurn = null;
+    state.assistTarget = null;
     renderTimeline();
     renderComparePanel();
     setStatus("已跳过本轮，可继续输入。", "ok");
@@ -1859,6 +2204,9 @@ function clearChat() {
   state.activeInspiration = null;
   state.selectedInspiration = null;
   state.inspirationLoading = false;
+  state.activeContinue = null;
+  state.continueLoading = false;
+  state.assistTarget = null;
   state.loading = false;
   state.loadingUserText = "";
   startNewSession();
@@ -1901,12 +2249,6 @@ function bindEvents() {
     void chooseTurn(state.pendingTurn.displayOrder[1]);
   });
   el.discardTurnBtn.addEventListener("click", () => void discardTurn());
-  el.inspirationToggleBtn.addEventListener("click", () => {
-    state.inspirationEnabled = !state.inspirationEnabled;
-    localStorage.setItem(LS_KEY_INSPIRATION, state.inspirationEnabled ? "1" : "0");
-    updateInspirationToggle();
-    setStatus(state.inspirationEnabled ? "灵感模式已开启，将从下一次选择胜者后生成。" : "灵感模式已关闭。", "ok");
-  });
 
   el.userInput.addEventListener("input", updateComposerHeight);
   el.userInput.addEventListener("keydown", (e) => {
@@ -1964,7 +2306,6 @@ async function loadRoles() {
 
 async function init() {
   hydratePlatformContext();
-  state.inspirationEnabled = localStorage.getItem(LS_KEY_INSPIRATION) === "1";
   startNewSession();
   setBusy(true);
   setStatus("初始化中...", "warn");
@@ -1990,7 +2331,6 @@ async function init() {
     bindEvents();
     renderTimeline();
     renderComparePanel();
-    updateInspirationToggle();
     renderInspirationPanel();
     await refreshStats({ silent: true });
     persistConfig();
