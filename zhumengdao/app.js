@@ -9,7 +9,7 @@ const LS_KEY_DEVICE = "zhumengdao-device-id";
 const MAX_STATS_RECORDS = 1000;
 const DEFAULT_WORKSPACE_ID = "ws-default";
 const DEFAULT_PROJECT_ID = "proj-default";
-const DEFAULT_SYSTEM_PROMPT = "你正在一个角色扮演对话 App 中与用户互动。请始终保持角色语气和人设，每次回复只需包含一两轮的动作描写加对话，简练自然，符合即时聊天节奏。";
+const DEFAULT_SYSTEM_PROMPT = "你正在一个角色扮演对话 App 中与用户互动。请始终保持角色语气和人设，每次回复只需包含一两轮的动作描写加对话，简练自然，符合即时聊天节奏。动作、表情、神态、心理活动等旁白请放在中文括号（）中。";
 
 function sanitizeEntityId(value, fallback = "") {
   const cleaned = String(value || "").trim().replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 120);
@@ -783,6 +783,9 @@ function hydrateConfig(serverDef = { a: {}, b: {} }) {
     "https://api.openai.com/v1/chat/completions",
   ];
   const LEGACY_MODEL_DEFAULTS = ["openai/gpt-4o-mini", "gpt-4o-mini"];
+  const LEGACY_SYSTEM_PROMPT_DEFAULTS = [
+    "你正在一个角色扮演对话 App 中与用户互动。请始终保持角色语气和人设，每次回复只需包含一两轮的动作描写加对话，简练自然，符合即时聊天节奏。",
+  ];
   // 用户主动设置 = hash 没变 且 值非空 且 不是旧硬编码默认 且 不等于上次服务端默认
   const isUserSet = (val, legacyList, prevServerDefault) =>
     !serverHashChanged &&
@@ -794,6 +797,7 @@ function hydrateConfig(serverDef = { a: {}, b: {} }) {
   const userEndpointB = isUserSet(saved.endpointB, LEGACY_ENDPOINT_DEFAULTS, saved._sdEndpointB) ? saved.endpointB : "";
   const userModelA    = isUserSet(saved.modelA,    LEGACY_MODEL_DEFAULTS,    saved._sdModelA)    ? saved.modelA    : "";
   const userModelB    = isUserSet(saved.modelB,    LEGACY_MODEL_DEFAULTS,    saved._sdModelB)    ? saved.modelB    : "";
+  const userSystemPrompt = LEGACY_SYSTEM_PROMPT_DEFAULTS.includes(saved.systemPrompt) ? "" : saved.systemPrompt;
 
   // 优先级：用户 localStorage > 服务端默认 > 代码内置 DEFAULT_CONFIG
   const config = {
@@ -804,7 +808,7 @@ function hydrateConfig(serverDef = { a: {}, b: {} }) {
     modelA: sanitizeModel(userModelA || serverDef.a?.model || DEFAULT_CONFIG.modelA),
     modelB: sanitizeModel(userModelB || serverDef.b?.model || DEFAULT_CONFIG.modelB),
     selectedRoleId: String(saved.selectedRoleId || ""),
-    systemPrompt: sanitizeSystemPrompt(saved.systemPrompt || DEFAULT_CONFIG.systemPrompt),
+    systemPrompt: sanitizeSystemPrompt(userSystemPrompt || DEFAULT_CONFIG.systemPrompt),
     apiKeyA: saved.rememberKeys ? sanitizeKey(saved.apiKeyA) : "",
     apiKeyB: saved.rememberKeys ? sanitizeKey(saved.apiKeyB) : "",
     temperature: clampTemperature(Number(saved.temperature)),
