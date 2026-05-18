@@ -118,6 +118,7 @@ function normalizeSession(item) {
       modelB: toSafeString(config.modelB, 200),
       endpointHostA: toSafeString(config.endpointHostA, 200),
       endpointHostB: toSafeString(config.endpointHostB, 200),
+      systemPrompt: toSafeText(config.systemPrompt, 12000),
     },
     turnCount: Math.max(0, Math.floor(toSafeNumber(item.turnCount) || 0)),
     deviceId: toSafeString(item.deviceId, 120),

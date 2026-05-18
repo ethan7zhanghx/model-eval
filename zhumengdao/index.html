@@ -114,6 +114,11 @@
           </label>
         </div>
         <div id="rolePreview" class="role-preview"></div>
+        <label class="field system-prompt-field">
+          <span>System Prompt</span>
+          <textarea id="systemPromptInput" rows="5" spellcheck="false"></textarea>
+          <small id="systemPromptLockHint" class="field-hint">会话开始后将锁定，确保同一组评测口径一致。</small>
+        </label>
         <label class="remember-row">
           <input id="rememberKeysInput" type="checkbox">
           <span>记住 API Key（存本地）</span>
