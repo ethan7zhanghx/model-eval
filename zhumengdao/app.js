@@ -1452,9 +1452,9 @@ function buildInspirationPrompt({ role, roleReply, conversation }) {
     "【输出内容要求】",
     `1. 你现在是「User」，请从User的视角回复${roleName}。`,
     "2. 请给出2条彼此差异明显、可以直接发送的候选回复。",
-    "3. 每条候选只能包含：一个中文括号（）里的动作/心理/表情描写 + 一句台词。",
-    "4. 不要写第二个括号，不要写多段旁白，不要连续追问，不要长篇描写。",
-    "5. 台词保持即时聊天节奏，短促自然，通常不超过一句。",
+    "3. 每条候选以一段简短的中文括号旁白开头，用来补充动作、表情、心理或感受；括号只出现一次。",
+    "4. 括号后接1到2句台词，语气像即时聊天，可以直接填入输入框发送。",
+    "5. 单条候选必须放在同一个字符串里，不要换行，不要写成长段独白，不要连续追问。",
     "",
     "【输出格式要求】",
     "如果没有对格式的特殊要求，请将动作、表情、神态、心理活动、感官反应、身体状态等放在中文括号（）中，作为旁白。",
@@ -1468,6 +1468,10 @@ function stripJsonFence(text) {
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/i, "")
     .trim();
+}
+
+function normalizeInspirationOptionText(text) {
+  return String(text || "").replace(/\s*\n+\s*/g, "").trim();
 }
 
 function normalizeParsedOptions(value, depth = 0) {
@@ -1487,7 +1491,7 @@ function normalizeParsedOptions(value, depth = 0) {
   if (!Array.isArray(values)) return [];
   return values
     .flatMap((item) => normalizeParsedOptions(item, depth + 1))
-    .map((item) => String(item || "").trim())
+    .map((item) => normalizeInspirationOptionText(item))
     .filter(Boolean)
     .slice(0, 2);
 }
@@ -1499,7 +1503,7 @@ function extractOptionsFromJsonLikeText(raw) {
   return body
     .split(/"\s*,\s*"/)
     .map((item) => item.replace(/\\"/g, '"').replace(/\\\\/g, "\\"))
-    .map((item) => item.trim())
+    .map((item) => normalizeInspirationOptionText(item))
     .filter((item) => item && !/^\{?\s*"options"\s*:/.test(item))
     .slice(0, 2);
 }
@@ -1525,6 +1529,7 @@ function parseInspirationOptions(content) {
   return raw
     .split(/\n+/)
     .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)]|[一二三四][、.])\s*/, "").trim())
+    .map((line) => normalizeInspirationOptionText(line))
     .filter(Boolean)
     .slice(0, 2);
 }
