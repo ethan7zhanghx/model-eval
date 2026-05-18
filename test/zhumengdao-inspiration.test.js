@@ -22,8 +22,11 @@ test('zhumengdao inspiration mode has chat UI and persistence contracts', async 
   assert.match(app, /function buildInspirationDisplayOrder/);
   assert.match(app, /function parseInspirationOptions/);
   assert.match(app, /data-assist-action="inspiration"/);
-  assert.match(app, /保持对话交流状态，不要写成长段内容/);
+  assert.match(app, /现在是在模拟 User 与/);
+  assert.match(app, /中文括号（）/);
+  assert.match(app, /请只输出可解析 JSON/);
   assert.doesNotMatch(app, /请保留你自己的表达风格/);
+  assert.doesNotMatch(app, /保持对话交流状态，不要写成长段内容/);
   assert.doesNotMatch(app, /INSPIRATION_MAX_TOKENS/);
   assert.match(app, /kind:\s*"inspiration"/);
   assert.match(recordsApi, /normalizeInspirationOptions/);
@@ -56,6 +59,7 @@ test('zhumengdao continue chat has manual AB flow and separate stats', async () 
   assert.match(app, /displayOrder:\s*Math\.random\(\) < 0\.5 \? \["a", "b"\] : \["b", "a"\]/);
   assert.match(app, /kind:\s*"continue"/);
   assert.match(app, /action:\s*"continue"/);
+  assert.match(app, /const responses = updated\.responses \|\| \{ a: updated\.apiA, b: updated\.apiB \};/);
   assert.match(app, /state\.assistTarget = \{ record, selectedContent \};\n\s*state\.pendingTurn = null;\n\s*setBusy\(false\);/);
   assert.doesNotMatch(app, /await generateInspirationForTurn\(record, selectedContent\)/);
   assert.match(recordsApi, /"continue"/);
