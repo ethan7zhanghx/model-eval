@@ -77,7 +77,7 @@ function toSafeNonNegativeInt(value) {
 
 function normalizeAction(value) {
   const action = toSafeString(value, 40) || "unknown";
-  if (["vote", "discard", "clear", "inspiration", "unknown"].includes(action)) return action;
+  if (["vote", "discard", "clear", "inspiration", "continue", "unknown"].includes(action)) return action;
   return "unknown";
 }
 
@@ -111,7 +111,7 @@ function normalizeRecord(item) {
     reportId: toSafeString(item.reportId, 120),
     createdAt: createdAt || Date.now(),
     action: normalizeAction(item.action),
-    kind: toSafeString(item.kind, 40) || (normalizeAction(item.action) === "inspiration" ? "inspiration" : "duel"),
+    kind: toSafeString(item.kind, 40) || (["inspiration", "continue"].includes(normalizeAction(item.action)) ? normalizeAction(item.action) : "duel"),
     sessionId: toSafeString(item.sessionId, 120),
     turnId: toSafeString(item.turnId, 120),
     inspirationId: toSafeString(item.inspirationId, 120),
@@ -132,6 +132,7 @@ function normalizeRecord(item) {
     edited: !!item.edited,
     finalUserText: toSafeText(item.finalUserText, 30000),
     options: normalizeInspirationOptions(item.options),
+    continuePrompt: toSafeText(item.continuePrompt, 12000),
     systemPrompt: toSafeText(item.systemPrompt, 12000),
     contextMessages: Array.isArray(item.contextMessages)
       ? item.contextMessages.slice(0, 200).map((m) => ({
@@ -194,7 +195,7 @@ function buildSummary(items) {
 
   for (const item of items) {
     if (item.sessionId) sessions.add(item.sessionId);
-    if (item.action === "inspiration" || item.kind === "inspiration") continue;
+    if (["inspiration", "continue"].includes(item.action) || ["inspiration", "continue"].includes(item.kind)) continue;
 
     const responses = [item.apiA, item.apiB];
     for (const api of responses) {

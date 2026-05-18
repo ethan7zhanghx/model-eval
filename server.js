@@ -133,7 +133,7 @@ function toSafeNonNegativeInt(value) {
 
 function normalizeZmdAction(value) {
   const action = toSafeString(value, 40) || "unknown";
-  if (["vote", "discard", "clear", "inspiration", "unknown"].includes(action)) return action;
+  if (["vote", "discard", "clear", "inspiration", "continue", "unknown"].includes(action)) return action;
   return "unknown";
 }
 
@@ -167,7 +167,7 @@ function normalizeZmdRecord(item) {
     reportId: toSafeString(item.reportId, 120),
     createdAt: createdAt || Date.now(),
     action: normalizeZmdAction(item.action),
-    kind: toSafeString(item.kind, 40) || (normalizeZmdAction(item.action) === "inspiration" ? "inspiration" : "duel"),
+    kind: toSafeString(item.kind, 40) || (["inspiration", "continue"].includes(normalizeZmdAction(item.action)) ? normalizeZmdAction(item.action) : "duel"),
     sessionId: toSafeString(item.sessionId, 120),
     turnId: toSafeString(item.turnId, 120),
     inspirationId: toSafeString(item.inspirationId, 120),
@@ -188,6 +188,7 @@ function normalizeZmdRecord(item) {
     edited: !!item.edited,
     finalUserText: toSafeText(item.finalUserText, 30000),
     options: normalizeInspirationOptions(item.options),
+    continuePrompt: toSafeText(item.continuePrompt, 12000),
     systemPrompt: toSafeText(item.systemPrompt, 12000),
     contextMessages: Array.isArray(item.contextMessages)
       ? item.contextMessages.slice(0, 200).map((m) => ({
@@ -250,7 +251,7 @@ function buildZmdSummary(items) {
 
   for (const item of items) {
     if (item.sessionId) sessions.add(item.sessionId);
-    if (item.action === "inspiration" || item.kind === "inspiration") continue;
+    if (["inspiration", "continue"].includes(item.action) || ["inspiration", "continue"].includes(item.kind)) continue;
 
     const responses = [item.apiA, item.apiB];
     for (const api of responses) {
@@ -364,6 +365,75 @@ async function writeZmdRecords(items) {
 
 // ── Sessions storage ──────────────────────────────────────────────────────────
 
+function normalizeZmdSessionResponse(r) {
+  if (!r || typeof r !== "object") return { ok: false, content: "" };
+  return {
+    ok: !!r.ok,
+    model: toSafeString(r.model, 200),
+    content: toSafeText(r.content, 30000),
+    latencyMs: toSafeNumber(r.latencyMs),
+    ttftMs: toSafeNumber(r.ttftMs),
+    tps: toSafeNumber(r.tps),
+    outputTokens: toSafeNumber(r.outputTokens),
+    error: r.error ? toSafeString(r.error, 500) : undefined,
+  };
+}
+
+function normalizeZmdSessionMessage(m) {
+  if (m?.type === "compare") {
+    return {
+      type: "compare",
+      recordId: toSafeString(m.recordId, 120),
+      turnId: toSafeString(m.turnId, 120),
+      turnOrder: toSafeNumber(m.turnOrder),
+      userText: toSafeText(m.userText, 30000),
+      displayOrder: Array.isArray(m.displayOrder) ? m.displayOrder : ["a", "b"],
+      voted: m.voted ? toSafeString(m.voted, 2) : undefined,
+      votedModel: m.votedModel ? toSafeString(m.votedModel, 200) : undefined,
+      responses: {
+        a: normalizeZmdSessionResponse(m.responses?.a),
+        b: normalizeZmdSessionResponse(m.responses?.b),
+      },
+    };
+  }
+  if (m?.type === "inspiration") {
+    return {
+      type: "inspiration",
+      id: toSafeString(m.id, 120),
+      afterTurnId: toSafeString(m.afterTurnId, 120),
+      options: normalizeInspirationOptions(m.options),
+      displayOrder: Array.isArray(m.displayOrder) ? m.displayOrder : ["a1", "a2", "b1", "b2"],
+      selectedOptionId: toSafeString(m.selectedOptionId, 20),
+      selectedModel: toSafeString(m.selectedModel, 200),
+      used: !!m.used,
+      edited: !!m.edited,
+      finalUserText: toSafeText(m.finalUserText, 30000),
+    };
+  }
+  if (m?.type === "continue") {
+    return {
+      type: "continue",
+      id: toSafeString(m.id, 120),
+      turnId: toSafeString(m.turnId, 120),
+      afterTurnId: toSafeString(m.afterTurnId, 120),
+      turnOrder: toSafeNumber(m.turnOrder),
+      responses: {
+        a: normalizeZmdSessionResponse(m.responses?.a),
+        b: normalizeZmdSessionResponse(m.responses?.b),
+      },
+      displayOrder: Array.isArray(m.displayOrder) ? m.displayOrder : ["a", "b"],
+      selected: m.selected ? toSafeString(m.selected, 2) : "",
+      selectedModel: toSafeString(m.selectedModel, 200),
+    };
+  }
+  return {
+    role: ["user", "assistant"].includes(String(m?.role)) ? String(m.role) : "user",
+    content: toSafeText(m?.content, 30000),
+    source: m?.source ? toSafeString(m.source, 1) : undefined,
+    time: m?.time ? toSafeString(m.time, 20) : undefined,
+  };
+}
+
 function normalizeZmdSession(item) {
   if (!item || typeof item !== "object") return null;
   const createdAt = toSafeNumber(item.createdAt);
@@ -374,12 +444,7 @@ function normalizeZmdSession(item) {
     : toSafeNumber(archivedAtRaw);
   const config = item.config && typeof item.config === "object" ? item.config : {};
   const messages = Array.isArray(item.messages)
-    ? item.messages.slice(0, 500).map((m) => ({
-        role: ["user", "assistant"].includes(String(m?.role)) ? String(m.role) : "user",
-        content: toSafeText(m?.content, 30000),
-        source: m?.source ? toSafeString(m.source, 1) : undefined,
-        time: m?.time ? toSafeString(m.time, 20) : undefined,
-      }))
+    ? item.messages.slice(0, 500).map(normalizeZmdSessionMessage)
     : [];
 
   return {

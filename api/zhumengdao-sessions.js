@@ -55,12 +55,82 @@ function normalizeResponse(r) {
   if (!r || typeof r !== "object") return { ok: false, content: "" };
   return {
     ok: !!r.ok,
+    model: toSafeString(r.model, 200),
     content: toSafeText(r.content, 30000),
     latencyMs: toSafeNumber(r.latencyMs),
     ttftMs: toSafeNumber(r.ttftMs),
     tps: toSafeNumber(r.tps),
     outputTokens: toSafeNumber(r.outputTokens),
     error: r.error ? toSafeString(r.error, 500) : undefined,
+  };
+}
+
+function normalizeInspirationOptions(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const normalized = {};
+  for (const key of ["a1", "a2", "b1", "b2"]) {
+    const item = raw[key] && typeof raw[key] === "object" ? raw[key] : {};
+    normalized[key] = {
+      source: key.startsWith("a") ? "a" : "b",
+      model: toSafeString(item.model, 200),
+      content: toSafeText(item.content, 30000),
+    };
+  }
+  return normalized;
+}
+
+function normalizeSessionMessage(m) {
+  if (m?.type === "compare") {
+    return {
+      type: "compare",
+      recordId: toSafeString(m.recordId, 120),
+      turnId: toSafeString(m.turnId, 120),
+      turnOrder: toSafeNumber(m.turnOrder),
+      userText: toSafeText(m.userText, 30000),
+      displayOrder: Array.isArray(m.displayOrder) ? m.displayOrder : ["a", "b"],
+      voted: m.voted ? toSafeString(m.voted, 2) : undefined,
+      votedModel: m.votedModel ? toSafeString(m.votedModel, 200) : undefined,
+      responses: {
+        a: normalizeResponse(m.responses?.a),
+        b: normalizeResponse(m.responses?.b),
+      },
+    };
+  }
+  if (m?.type === "inspiration") {
+    return {
+      type: "inspiration",
+      id: toSafeString(m.id, 120),
+      afterTurnId: toSafeString(m.afterTurnId, 120),
+      options: normalizeInspirationOptions(m.options),
+      displayOrder: Array.isArray(m.displayOrder) ? m.displayOrder : ["a1", "a2", "b1", "b2"],
+      selectedOptionId: toSafeString(m.selectedOptionId, 20),
+      selectedModel: toSafeString(m.selectedModel, 200),
+      used: !!m.used,
+      edited: !!m.edited,
+      finalUserText: toSafeText(m.finalUserText, 30000),
+    };
+  }
+  if (m?.type === "continue") {
+    return {
+      type: "continue",
+      id: toSafeString(m.id, 120),
+      turnId: toSafeString(m.turnId, 120),
+      afterTurnId: toSafeString(m.afterTurnId, 120),
+      turnOrder: toSafeNumber(m.turnOrder),
+      responses: {
+        a: normalizeResponse(m.responses?.a),
+        b: normalizeResponse(m.responses?.b),
+      },
+      displayOrder: Array.isArray(m.displayOrder) ? m.displayOrder : ["a", "b"],
+      selected: m.selected ? toSafeString(m.selected, 2) : "",
+      selectedModel: toSafeString(m.selectedModel, 200),
+    };
+  }
+  return {
+    role: ["user", "assistant"].includes(String(m?.role)) ? String(m.role) : "user",
+    content: toSafeText(m?.content, 30000),
+    source: m?.source ? toSafeString(m.source, 1) : undefined,
+    time: m?.time ? toSafeString(m.time, 20) : undefined,
   };
 }
 
@@ -74,26 +144,7 @@ function normalizeSession(item) {
     : toSafeNumber(archivedAtRaw);
   const config = item.config && typeof item.config === "object" ? item.config : {};
   const messages = Array.isArray(item.messages)
-    ? item.messages.slice(0, 500).map((m) => {
-        if (m?.type === "compare") {
-          return {
-            type: "compare",
-            displayOrder: Array.isArray(m.displayOrder) ? m.displayOrder : ["a", "b"],
-            voted: m.voted ? toSafeString(m.voted, 2) : undefined,
-            votedModel: m.votedModel ? toSafeString(m.votedModel, 200) : undefined,
-            responses: {
-              a: normalizeResponse(m.responses?.a),
-              b: normalizeResponse(m.responses?.b),
-            },
-          };
-        }
-        return {
-          role: ["user", "assistant"].includes(String(m?.role)) ? String(m.role) : "user",
-          content: toSafeText(m?.content, 30000),
-          source: m?.source ? toSafeString(m.source, 1) : undefined,
-          time: m?.time ? toSafeString(m.time, 20) : undefined,
-        };
-      })
+    ? item.messages.slice(0, 500).map(normalizeSessionMessage)
     : [];
 
   return {

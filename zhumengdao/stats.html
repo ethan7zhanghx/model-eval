@@ -123,6 +123,7 @@
     .turn-compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .turn-response { border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
     .turn-response.chosen { border-color: var(--accent); background: var(--accent-light); }
+    .turn-response.continue-response.chosen { border-color: #0f766e; background: #ecfdf5; }
     .turn-response.errored { border-color: color-mix(in srgb, var(--err) 30%, var(--line)); background: #fff8f8; }
     .turn-response-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .turn-model-name { font-size: .75rem; color: var(--text-soft); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -132,6 +133,7 @@
     .turn-response-body::-webkit-scrollbar { width: 3px; }
     .turn-response-body::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 99px; }
     .turn-skip-note { margin: 0; font-size: .78rem; color: var(--warn); padding: 4px 8px; background: #fffbeb; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--warn) 25%, transparent); }
+    .continue-note { color: #0f766e; background: #ecfdf5; border-color: color-mix(in srgb, #0f766e 25%, transparent); }
 
     .dialog-body .msg { max-width: min(80%, 640px); }
 
@@ -213,6 +215,7 @@
     <div class="stats-tabs" role="tablist" aria-label="评测类型">
       <button class="stats-tab active" id="tabNormal" type="button" role="tab" aria-selected="true" aria-controls="normalStatsPane" data-stats-tab="normal">正常对话 A/B</button>
       <button class="stats-tab" id="tabInspiration" type="button" role="tab" aria-selected="false" aria-controls="inspirationStatsPane" data-stats-tab="inspiration">灵感模式 A/B</button>
+      <button class="stats-tab" id="tabContinue" type="button" role="tab" aria-selected="false" aria-controls="continueStatsPane" data-stats-tab="continue">继续聊 A/B</button>
     </div>
 
     <section class="stats-pane" id="normalStatsPane" role="tabpanel" aria-labelledby="tabNormal">
@@ -260,6 +263,36 @@
       <div class="ranking-card">
         <h2>灵感模型排名</h2>
         <div id="inspirationRankingBody"><p class="empty-state" style="padding:8px 0">暂无灵感采用数据</p></div>
+      </div>
+    </section>
+
+    <section class="stats-pane hidden" id="continueStatsPane" role="tabpanel" aria-labelledby="tabContinue">
+      <p class="mode-note">统计口径：继续聊中，用户选择的角色续聊候选即记为该模型胜出。</p>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">继续聊轮次</div><div class="kpi-value" id="contTotal">—</div></div>
+        <div class="kpi-card kpi-ok"><div class="kpi-label">已选择</div><div class="kpi-value" id="contVotes">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">A 胜</div><div class="kpi-value" id="contAWins">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">B 胜</div><div class="kpi-value" id="contBWins">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">平均 TTFT</div><div class="kpi-value" id="contAvgTtft">—</div><div class="kpi-sub">ms</div></div>
+        <div class="kpi-card"><div class="kpi-label">平均 TPS</div><div class="kpi-value" id="contAvgTps">—</div><div class="kpi-sub">tokens/s</div></div>
+      </div>
+
+      <div class="ranking-card">
+        <h2>继续聊模型排名</h2>
+        <div id="continueRankingBody"><p class="empty-state" style="padding:8px 0">暂无继续聊数据</p></div>
+      </div>
+
+      <div class="matrix-card">
+        <h2>继续聊对战矩阵（行 vs 列）</h2>
+        <div class="matrix-scroll" id="continueMatrixBody"><p class="empty-state">暂无继续聊数据</p></div>
+        <p class="matrix-note">格子显示：行模型 vs 列模型 的胜场/总场次（胜率%）。相同模型对战不计入。</p>
+      </div>
+
+      <div class="section-card">
+        <div class="section-head">
+          <h2>继续聊速度统计（TTFT / TPS）</h2>
+        </div>
+        <div class="perf-wrap" id="continuePerfTableBody"><p class="empty-state" style="padding:12px 0">暂无速度数据</p></div>
       </div>
     </section>
 
@@ -489,6 +522,13 @@
     }
 
     // ── 统计：对战矩阵 + Bradley-Terry 排名 ──────────────
+    function isInspirationRecord(record) {
+      return record.action === "inspiration" || record.kind === "inspiration";
+    }
+    function isContinueRecord(record) {
+      return record.action === "continue" || record.kind === "continue";
+    }
+
     function buildMatchStats(records) {
       // wins[i][j] = model i 在对阵 model j 时赢的次数
       // games[i][j] = model i 对阵 model j 的总场次
@@ -531,7 +571,7 @@
 
       for (const r of records) {
         if (r.sessionId) sessions.add(r.sessionId);
-        if (r.action === "inspiration" || r.kind === "inspiration") continue;
+        if (isInspirationRecord(r) || isContinueRecord(r)) continue;
 
         const perfResponses = [r.apiA, r.apiB];
         for (const api of perfResponses) {
@@ -612,7 +652,7 @@
     }
 
     function buildInspirationStats(records) {
-      const items = records.filter((record) => record.action === "inspiration" || record.kind === "inspiration");
+      const items = records.filter(isInspirationRecord);
       const byModel = new Map();
       let used = 0;
       let aWins = 0;
@@ -657,6 +697,96 @@
       };
     }
 
+    function buildContinueStats(records) {
+      const items = records.filter(isContinueRecord);
+      const wins = {};
+      const games = {};
+      const modelSet = new Set();
+      const perfByModel = new Map();
+      let voteCount = 0;
+      let aWins = 0;
+      let bWins = 0;
+      let ttftSamples = 0;
+      let tpsSamples = 0;
+      let ttftSum = 0;
+      let tpsSum = 0;
+
+      function ensure(a, b) {
+        if (!wins[a]) wins[a] = {};
+        if (!wins[b]) wins[b] = {};
+        if (!games[a]) games[a] = {};
+        if (!games[b]) games[b] = {};
+        if (wins[a][b] == null) wins[a][b] = 0;
+        if (wins[b][a] == null) wins[b][a] = 0;
+        if (games[a][b] == null) games[a][b] = 0;
+        if (games[b][a] == null) games[b][a] = 0;
+      }
+      function ensurePerfModel(model) {
+        if (!perfByModel.has(model)) {
+          perfByModel.set(model, { model, samples: 0, ttftSamples: 0, tpsSamples: 0, ttftSum: 0, tpsSum: 0 });
+        }
+        return perfByModel.get(model);
+      }
+
+      for (const item of items) {
+        for (const api of [item.apiA, item.apiB]) {
+          if (!api || !api.ok) continue;
+          const model = api.model || "unknown";
+          const row = ensurePerfModel(model);
+          row.samples += 1;
+          const ttft = toNum(api.ttftMs);
+          if (ttft != null && ttft >= 0) {
+            row.ttftSamples += 1;
+            row.ttftSum += ttft;
+            ttftSamples += 1;
+            ttftSum += ttft;
+          }
+          const tps = toNum(api.tps);
+          if (tps != null && tps >= 0) {
+            row.tpsSamples += 1;
+            row.tpsSum += tps;
+            tpsSamples += 1;
+            tpsSum += tps;
+          }
+        }
+
+        if (!item.selected) continue;
+        voteCount += 1;
+        if (item.selected === "a") aWins += 1;
+        if (item.selected === "b") bWins += 1;
+
+        const mA = item.apiA?.model;
+        const mB = item.apiB?.model;
+        if (!mA || !mB || mA === mB) continue;
+        modelSet.add(mA);
+        modelSet.add(mB);
+        ensure(mA, mB);
+        games[mA][mB] += 1;
+        games[mB][mA] += 1;
+        const winner = item.selectedModel || (item.selected === "a" ? mA : item.selected === "b" ? mB : null);
+        if (winner === mA) wins[mA][mB] += 1;
+        else if (winner === mB) wins[mB][mA] += 1;
+      }
+
+      return {
+        wins,
+        games,
+        models: [...modelSet].sort(),
+        total: items.length,
+        voteCount,
+        aWins,
+        bWins,
+        avgTtftMs: ttftSamples ? ttftSum / ttftSamples : null,
+        avgTps: tpsSamples ? tpsSum / tpsSamples : null,
+        perfRows: [...perfByModel.values()].map((row) => ({
+          model: row.model,
+          samples: row.samples,
+          avgTtftMs: row.ttftSamples ? row.ttftSum / row.ttftSamples : null,
+          avgTps: row.tpsSamples ? row.tpsSum / row.tpsSamples : null,
+        })).sort((a, b) => b.samples - a.samples || a.model.localeCompare(b.model)),
+      };
+    }
+
     // Bradley-Terry 迭代求解
     function bradleyTerry(models, wins, games, maxIter = 200, tol = 1e-6) {
       if (!models.length) return {};
@@ -689,10 +819,10 @@
       return score;
     }
 
-    function renderRanking(stats) {
-      const el = document.getElementById("rankingBody");
+    function renderRanking(stats, targetId = "rankingBody", emptyText = "暂无跨模型对战数据") {
+      const el = document.getElementById(targetId);
       if (!stats.models.length) {
-        el.innerHTML = `<p class="empty-state" style="padding:8px 0">暂无跨模型对战数据</p>`;
+        el.innerHTML = `<p class="empty-state" style="padding:8px 0">${esc(emptyText)}</p>`;
         return;
       }
       const scores = bradleyTerry(stats.models, stats.wins, stats.games);
@@ -715,10 +845,10 @@
       }).join("");
     }
 
-    function renderMatrix(stats) {
-      const el = document.getElementById("matrixBody");
+    function renderMatrix(stats, targetId = "matrixBody", emptyText = "暂无跨模型对战数据") {
+      const el = document.getElementById(targetId);
       if (!stats.models.length) {
-        el.innerHTML = `<p class="empty-state">暂无跨模型对战数据</p>`;
+        el.innerHTML = `<p class="empty-state">${esc(emptyText)}</p>`;
         return;
       }
       const { models, wins, games } = stats;
@@ -763,8 +893,8 @@
         stats.avgTps != null ? stats.avgTps.toFixed(2) : "—";
     }
 
-    function renderPerfTable(stats) {
-      const el = document.getElementById("perfTableBody");
+    function renderPerfTable(stats, targetId = "perfTableBody") {
+      const el = document.getElementById(targetId);
       const rows = Array.isArray(stats.perfRows) ? stats.perfRows : [];
       if (!rows.length) {
         el.innerHTML = `<p class="empty-state" style="padding:12px 0">暂无速度数据</p>`;
@@ -818,6 +948,20 @@
       }).join("");
     }
 
+    function renderContinueStats(stats) {
+      document.getElementById("contTotal").textContent = stats.total;
+      document.getElementById("contVotes").textContent = stats.voteCount;
+      document.getElementById("contAWins").textContent = stats.aWins;
+      document.getElementById("contBWins").textContent = stats.bWins;
+      document.getElementById("contAvgTtft").textContent =
+        stats.avgTtftMs != null ? String(Math.round(stats.avgTtftMs)) : "—";
+      document.getElementById("contAvgTps").textContent =
+        stats.avgTps != null ? stats.avgTps.toFixed(2) : "—";
+      renderRanking(stats, "continueRankingBody", "暂无继续聊对战数据");
+      renderMatrix(stats, "continueMatrixBody", "暂无继续聊对战数据");
+      renderPerfTable(stats, "continuePerfTableBody");
+    }
+
     function renderStatsPanels() {
       const records = getStatsRecords();
       const stats = buildMatchStats(records);
@@ -826,10 +970,11 @@
       renderMatrix(stats);
       renderPerfTable(stats);
       renderInspirationStats(buildInspirationStats(records));
+      renderContinueStats(buildContinueStats(records));
     }
 
     function setStatsTab(tab) {
-      activeStatsTab = tab === "inspiration" ? "inspiration" : "normal";
+      activeStatsTab = ["normal", "inspiration", "continue"].includes(tab) ? tab : "normal";
       for (const button of document.querySelectorAll("[data-stats-tab]")) {
         const active = button.dataset.statsTab === activeStatsTab;
         button.classList.toggle("active", active);
@@ -837,6 +982,7 @@
       }
       document.getElementById("normalStatsPane").classList.toggle("hidden", activeStatsTab !== "normal");
       document.getElementById("inspirationStatsPane").classList.toggle("hidden", activeStatsTab !== "inspiration");
+      document.getElementById("continueStatsPane").classList.toggle("hidden", activeStatsTab !== "continue");
     }
 
     // ── 对话列表 ──────────────────────────────────────────
@@ -1068,6 +1214,52 @@
             ${rec.finalUserText ? `<p class="inspiration-final">最终发送：${esc(String(rec.finalUserText).trim())}</p>` : ""}
           `;
           body.appendChild(block);
+          continue;
+        }
+
+        if (isContinueRecord(rec)) {
+          const block = document.createElement("div");
+          block.className = "turn-block continue-detail-block";
+          const selectedModel = rec.selectedModel ||
+            (rec.selected === "a" ? rec.apiA?.model : rec.selected === "b" ? rec.apiB?.model : null);
+          const responses = [
+            { data: rec.apiA, slot: "a" },
+            { data: rec.apiB, slot: "b" },
+          ];
+          const grid = document.createElement("div");
+          grid.className = "turn-compare-grid continue-detail-grid";
+          for (const { data, slot } of responses) {
+            if (!data) continue;
+            const isChosen = rec.selected === slot;
+            const div = document.createElement("div");
+            div.className = `turn-response continue-response${isChosen ? " chosen" : ""}${!data.ok ? " errored" : ""}`;
+            div.innerHTML = `
+              <div class="turn-response-head">
+                <span class="turn-model-name" title="${esc(data.model)}">${esc(slot.toUpperCase())} · ${esc(data.model || "—")}</span>
+                <span class="turn-latency">${esc(formatPerfInline(data))}</span>
+                ${isChosen ? `<span class="chosen-badge">✓ 已选</span>` : ""}
+              </div>
+              <div class="turn-response-body">${esc(data.content || "（无内容）")}</div>
+            `;
+            grid.appendChild(div);
+          }
+          block.innerHTML = `<div class="turn-skip-note continue-note">继续聊 · ${rec.selected ? "已加入对话" : "尚未选择"}</div>`;
+          block.appendChild(grid);
+          body.appendChild(block);
+
+          if (rec.selected) {
+            const chosen = rec.selected === "a" ? rec.apiA : rec.apiB;
+            const assistantEl = document.createElement("article");
+            assistantEl.className = "msg assistant";
+            assistantEl.innerHTML = `
+              <div class="msg-meta">
+                <span>助手继续</span>
+                <span class="msg-source-badge badge-${rec.selected}">${esc(selectedModel || rec.selected.toUpperCase())}</span>
+              </div>
+              <div class="msg-bubble">${esc(chosen?.content || "")}</div>
+            `;
+            body.appendChild(assistantEl);
+          }
           continue;
         }
 
