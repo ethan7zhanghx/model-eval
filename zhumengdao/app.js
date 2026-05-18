@@ -2167,6 +2167,7 @@ async function chooseTurn(sourceTag) {
     state.turnOrder = state.pendingTurn.turnOrder;
     state.assistTarget = { record, selectedContent };
     state.pendingTurn = null;
+    setBusy(false);
     renderTimeline();
     renderComparePanel();
     setStatus(`已选择 ${record.selectedModel || sourceTag.toUpperCase()}，已保存。`, "ok");

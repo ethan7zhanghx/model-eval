@@ -51,6 +51,7 @@ test('zhumengdao continue chat has manual AB flow and separate stats', async () 
   assert.match(app, /displayOrder:\s*Math\.random\(\) < 0\.5 \? \["a", "b"\] : \["b", "a"\]/);
   assert.match(app, /kind:\s*"continue"/);
   assert.match(app, /action:\s*"continue"/);
+  assert.match(app, /state\.assistTarget = \{ record, selectedContent \};\n\s*state\.pendingTurn = null;\n\s*setBusy\(false\);/);
   assert.doesNotMatch(app, /await generateInspirationForTurn\(record, selectedContent\)/);
   assert.match(recordsApi, /"continue"/);
   assert.match(server, /"continue"/);
