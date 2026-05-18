@@ -1493,6 +1493,10 @@ function shuffleList(items) {
   return next;
 }
 
+function buildInspirationDisplayOrder() {
+  return shuffleList(["a1", "a2", "b1", "b2"]);
+}
+
 function buildSelectedConversationWithReply(record, selectedContent) {
   const conversation = Array.isArray(record?.contextMessages)
     ? record.contextMessages.filter((item) => item.role !== "system" && item.content)
@@ -1535,7 +1539,7 @@ function buildInspirationRecord({ record, prompt, resultA, resultB }) {
     used: false,
     edited: false,
     finalUserText: "",
-    displayOrder: shuffleList(["a1", "a2", "b1", "b2"]),
+    displayOrder: buildInspirationDisplayOrder(),
     roleId: role ? role.id : "",
     roleName: role ? role.nickname : "",
     systemPrompt: prompt,
