@@ -488,6 +488,10 @@ function normalizeForCompare(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
+function formatAiDisplayText(text) {
+  return String(text || "").replace(/[ \t]*\r?\n+[ \t]*/g, "").trim();
+}
+
 function toFiniteNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -581,7 +585,7 @@ function renderSessionDetail(session, turnRecords) {
             const chosen = rec.selectedOptionId === optionId;
             return `
               <div class="inspiration-option${chosen ? " selected" : ""}">
-                <span>${escapeHtml(option.content || "（空候选）")}</span>
+                <span>${escapeHtml(formatAiDisplayText(option.content) || "（空候选）")}</span>
                 ${chosen ? `<span class="inspiration-source">${escapeHtml(String(option.source || "").toUpperCase())} · ${escapeHtml(option.model || "未知模型")}</span>` : ""}
               </div>
             `;
@@ -613,7 +617,7 @@ function renderSessionDetail(session, turnRecords) {
                   <span class="response-latency">${escapeHtml(formatPerfText(response))}</span>
                   ${chosen ? `<span class="tl-chosen-badge">✓ 已选</span>` : ""}
                 </div>
-                <div class="response-body">${escapeHtml(response?.content || "（无内容）")}</div>
+                <div class="response-body">${escapeHtml(formatAiDisplayText(response?.content) || "（无内容）")}</div>
               </article>
             `;
           }).join("")}
@@ -648,7 +652,7 @@ function renderSessionDetail(session, turnRecords) {
             <span class="response-latency">${escapeHtml(formatPerfText(rec.apiA))}</span>
             ${selectedA ? `<span class="detail-chosen-badge">✓ 已选</span>` : ""}
           </div>
-          <div class="detail-response-body">${escapeHtml(rec.apiA?.content || "（无内容）")}</div>
+          <div class="detail-response-body">${escapeHtml(formatAiDisplayText(rec.apiA?.content) || "（无内容）")}</div>
         </div>
         <div class="detail-response ${selectedB ? "detail-selected" : ""} ${!rec.apiB?.ok ? "detail-error" : ""}">
           <div class="detail-response-head">
@@ -657,7 +661,7 @@ function renderSessionDetail(session, turnRecords) {
             <span class="response-latency">${escapeHtml(formatPerfText(rec.apiB))}</span>
             ${selectedB ? `<span class="detail-chosen-badge">✓ 已选</span>` : ""}
           </div>
-          <div class="detail-response-body">${escapeHtml(rec.apiB?.content || "（无内容）")}</div>
+          <div class="detail-response-body">${escapeHtml(formatAiDisplayText(rec.apiB?.content) || "（无内容）")}</div>
         </div>
       </div>
       ${discarded ? `<p class="detail-discard-note">⚠ 本轮已放弃</p>` : ""}
@@ -675,7 +679,7 @@ function renderSessionDetail(session, turnRecords) {
           <span>助手</span>
           <span class="msg-source-badge badge-${rec.selected}">${escapeHtml(chosenModel)}</span>
         </div>
-        <div class="msg-bubble">${escapeHtml(chosen?.content || "")}</div>
+        <div class="msg-bubble">${escapeHtml(formatAiDisplayText(chosen?.content))}</div>
       `;
       el.sessionModalBody.appendChild(assistantEl);
     }
@@ -848,7 +852,7 @@ function createCompareNode(row) {
 
     const body = document.createElement("div");
     body.className = "response-body";
-    body.textContent = res.content || (res.ok ? "" : `请求失败：${res.error || ""}`);
+    body.textContent = res.ok ? formatAiDisplayText(res.content) : `请求失败：${res.error || ""}`;
     if (!res.ok) body.classList.add("response-error");
 
     card.appendChild(head);
@@ -880,7 +884,7 @@ function createMessageNode(message) {
 
   const bubble = document.createElement("div");
   bubble.className = "msg-bubble";
-  bubble.textContent = message.content;
+  bubble.textContent = message.role === "assistant" ? formatAiDisplayText(message.content) : message.content;
 
   item.appendChild(meta);
   item.appendChild(bubble);
@@ -902,7 +906,7 @@ function createInspirationNode(row) {
       <span>灵感模式</span>
       <span class="inspiration-source">${escapeHtml(sourceText)}</span>
     </div>
-    <div class="msg-bubble">${escapeHtml(row.finalUserText || option?.content || "已生成候选，用户未采用。")}</div>
+    <div class="msg-bubble">${escapeHtml(row.finalUserText || formatAiDisplayText(option?.content) || "已生成候选，用户未采用。")}</div>
   `;
   return item;
 }
@@ -918,7 +922,7 @@ function createContinueNode(row) {
       <span>继续聊</span>
       <span class="inspiration-source">${selected ? `${escapeHtml(selected.toUpperCase())} · ${escapeHtml(selectedModel || "未知模型")}` : "未选择"}</span>
     </div>
-    <div class="msg-bubble">${escapeHtml(selectedContent || "已生成候选，尚未选择。")}</div>
+    <div class="msg-bubble">${escapeHtml(formatAiDisplayText(selectedContent) || "已生成候选，尚未选择。")}</div>
   `;
   return item;
 }
@@ -1019,7 +1023,7 @@ function renderInspirationPanel() {
             const response = continueRow.responses[source] || {};
             return `
               <button class="continue-option" type="button" data-continue-source="${escapeHtml(source)}" ${response.ok ? "" : "disabled"}>
-                <span>${escapeHtml(response.content || "（空候选）")}</span>
+                <span>${escapeHtml(formatAiDisplayText(response.content) || "（空候选）")}</span>
               </button>
             `;
           }).join("")}
@@ -1067,7 +1071,7 @@ function renderInspirationPanel() {
         const chosen = selectedId === optionId;
         return `
           <button class="inspiration-option${chosen ? " selected" : ""}" type="button" data-option-id="${escapeHtml(optionId)}">
-            <span>${escapeHtml(option.content || "（空候选）")}</span>
+            <span>${escapeHtml(formatAiDisplayText(option.content) || "（空候选）")}</span>
           </button>
         `;
       }).join("")}
@@ -1089,8 +1093,8 @@ function renderComparePanel() {
 
   el.comparePanel.classList.remove("hidden");
   const [leftSrc, rightSrc] = pending.displayOrder;
-  el.responseA.textContent = pending.responses[leftSrc].content;
-  el.responseB.textContent = pending.responses[rightSrc].content;
+  el.responseA.textContent = formatAiDisplayText(pending.responses[leftSrc].content);
+  el.responseB.textContent = formatAiDisplayText(pending.responses[rightSrc].content);
   if (el.latencyA) el.latencyA.textContent = formatPerfText(pending.responses[leftSrc]);
   if (el.latencyB) el.latencyB.textContent = formatPerfText(pending.responses[rightSrc]);
   el.chooseABtn.classList.remove("hidden");
@@ -1897,8 +1901,9 @@ function selectInspirationOption(optionId) {
     el.userInput.focus();
     return;
   }
+  const displayContent = formatAiDisplayText(option.content);
   state.selectedInspiration = { optionId, source: option.source, model: option.model, originalText: option.content };
-  el.userInput.value = option.content;
+  el.userInput.value = displayContent;
   updateComposerHeight();
   renderInspirationPanel();
   el.userInput.focus();

@@ -25,6 +25,9 @@ test('zhumengdao inspiration mode has chat UI and persistence contracts', async 
   assert.match(app, /现在是在模拟 User 与/);
   assert.match(app, /中文括号（）/);
   assert.match(app, /请只输出可解析 JSON/);
+  assert.match(app, /function formatAiDisplayText/);
+  assert.match(app, /el\.responseA\.textContent = formatAiDisplayText/);
+  assert.match(app, /el\.userInput\.value = displayContent/);
   assert.doesNotMatch(app, /请保留你自己的表达风格/);
   assert.doesNotMatch(app, /保持对话交流状态，不要写成长段内容/);
   assert.doesNotMatch(app, /INSPIRATION_MAX_TOKENS/);
