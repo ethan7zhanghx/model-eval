@@ -20,6 +20,11 @@
   ],
   "redirects": [
     {
+      "source": "/zhumengdao",
+      "destination": "/zhumengdao/",
+      "permanent": true
+    },
+    {
       "source": "/",
       "destination": "/under-construction.html",
       "permanent": false

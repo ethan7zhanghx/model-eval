@@ -1,6 +1,7 @@
 (function () {
   const host = window.location.hostname;
-  if (!host.includes("interval-model-eval")) return;
+  const intervalHosts = new Set(["model-eval.ethan7zhanghx.com"]);
+  if (!host.includes("interval-model-eval") && !intervalHosts.has(host)) return;
 
   const iconHref = "/interval-model-eval-icon.png?v=1";
   const icon = document.createElement("link");
