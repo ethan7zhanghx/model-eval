@@ -9,7 +9,7 @@
     "dev": "node server.js",
     "test": "node --test",
     "start": "node server.js",
-    "check": "node --check home.js && node --check app.js && node --check server.js && node --check lib/platform-store.js && node --check lib/platform-api.js && node --check api/config-history.js && node --check api/zhumengdao-records.js && node --check api/zhumengdao-sessions.js && node --check api/llm-proxy.js && node --check api/admin-auth.js && node --check zhumengdao/app.js"
+    "check": "node --check home.js && node --check app.js && node --check server.js && node --check lib/platform-store.js && node --check lib/platform-api.js && node --check api/config-history.js && node --check api/zhumengdao-records.js && node --check api/zhumengdao-sessions.js && node --check api/zhumengdao-monitor.js && node --check api/llm-proxy.js && node --check api/admin-auth.js && node --check zhumengdao/app.js"
   },
   "engines": {
     "node": "20.x"
