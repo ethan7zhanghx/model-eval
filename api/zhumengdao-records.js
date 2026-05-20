@@ -1,6 +1,11 @@
 const RECORDS_KEY = "zhumengdao:duel-records:v1";
 const MAX_STORED_RECORDS = 20000;
 const MAX_READ_LIMIT = 2000;
+const { namespacedKey } = require("../lib/storage-namespace");
+
+function getRecordsKey() {
+  return namespacedKey(RECORDS_KEY);
+}
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -250,7 +255,7 @@ function sanitizeLimit(value) {
 
 async function readRecords(limit) {
   const redis = getRedis();
-  const list = await redis.lrange(RECORDS_KEY, 0, limit - 1);
+  const list = await redis.lrange(getRecordsKey(), 0, limit - 1);
   if (!Array.isArray(list)) return [];
 
   const items = [];
@@ -274,14 +279,16 @@ async function appendRecord(record) {
   }
 
   const redis = getRedis();
-  await redis.lpush(RECORDS_KEY, JSON.stringify(normalized));
-  await redis.ltrim(RECORDS_KEY, 0, MAX_STORED_RECORDS - 1);
+  const recordsKey = getRecordsKey();
+  await redis.lpush(recordsKey, JSON.stringify(normalized));
+  await redis.ltrim(recordsKey, 0, MAX_STORED_RECORDS - 1);
   return normalized;
 }
 
 async function updateRecord(id, patch) {
   const redis = getRedis();
-  const list = await redis.lrange(RECORDS_KEY, 0, MAX_STORED_RECORDS - 1);
+  const recordsKey = getRecordsKey();
+  const list = await redis.lrange(recordsKey, 0, MAX_STORED_RECORDS - 1);
   if (!Array.isArray(list)) {
     throw createError("Record not found", "RECORD_NOT_FOUND", 404);
   }
@@ -298,7 +305,7 @@ async function updateRecord(id, patch) {
     if (!existing || existing.id !== id) continue;
 
     const updated = normalizeRecord({ ...existing, ...patch, id });
-    await redis.lset(RECORDS_KEY, idx, JSON.stringify(updated));
+    await redis.lset(recordsKey, idx, JSON.stringify(updated));
     return updated;
   }
 
@@ -307,7 +314,7 @@ async function updateRecord(id, patch) {
 
 async function clearRecords() {
   const redis = getRedis();
-  await redis.del(RECORDS_KEY);
+  await redis.del(getRecordsKey());
 }
 
 module.exports = async function handler(req, res) {

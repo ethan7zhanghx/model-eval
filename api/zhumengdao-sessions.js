@@ -1,5 +1,10 @@
 const SESSIONS_KEY = "zhumengdao:sessions:v1";
 const MAX_STORED_SESSIONS = 5000;
+const { namespacedKey } = require("../lib/storage-namespace");
+
+function getSessionsKey() {
+  return namespacedKey(SESSIONS_KEY);
+}
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -180,7 +185,7 @@ function normalizeSession(item) {
 
 async function readSessions() {
   const redis = getRedis();
-  const raw = await redis.get(SESSIONS_KEY);
+  const raw = await redis.get(getSessionsKey());
   if (!raw) return [];
   try {
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
@@ -194,7 +199,7 @@ async function readSessions() {
 async function writeSessions(sessions) {
   const normalized = sessions.map(normalizeSession).filter(Boolean).slice(0, MAX_STORED_SESSIONS);
   const redis = getRedis();
-  await redis.set(SESSIONS_KEY, JSON.stringify(normalized));
+  await redis.set(getSessionsKey(), JSON.stringify(normalized));
   return normalized;
 }
 

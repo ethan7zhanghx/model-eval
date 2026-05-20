@@ -2,6 +2,15 @@ const RECORDS_KEY = "zhumengdao:duel-records:v1";
 const ALERT_STATE_KEY = "zhumengdao:monitor:ernie-5.1:v1";
 const MAX_RECORDS_TO_SCAN = 20000;
 const DEFAULT_ALERT_EMAIL_TO = ["zhanghaoxin@baidu.com", "zhouchenyue@baidu.com"];
+const { namespacedKey } = require("../lib/storage-namespace");
+
+function getRecordsKey() {
+  return namespacedKey(RECORDS_KEY);
+}
+
+function getAlertStateKey() {
+  return namespacedKey(ALERT_STATE_KEY);
+}
 
 let _redis = null;
 function getRedis() {
@@ -82,7 +91,7 @@ function evaluateModelWinRate(records, options = {}) {
 }
 
 async function readRecords(redis) {
-  const rows = await redis.lrange(RECORDS_KEY, 0, MAX_RECORDS_TO_SCAN - 1);
+  const rows = await redis.lrange(getRecordsKey(), 0, MAX_RECORDS_TO_SCAN - 1);
   const records = [];
   for (const row of rows || []) {
     if (typeof row !== "string") continue;
@@ -261,7 +270,8 @@ async function handler(req, res) {
 
     const records = await readRecords(redis);
     const result = evaluateModelWinRate(records, { targetModel, threshold, minSamples });
-    const state = parseState(await redis.get(ALERT_STATE_KEY));
+    const alertStateKey = getAlertStateKey();
+    const state = parseState(await redis.get(alertStateKey));
     let email = { sent: false };
 
     if (result.shouldAlert && shouldSendEmail(state)) {
@@ -272,7 +282,7 @@ async function handler(req, res) {
         result,
       });
       if (email.sent) {
-        await redis.set(ALERT_STATE_KEY, JSON.stringify({
+        await redis.set(alertStateKey, JSON.stringify({
           alerting: true,
           lastSentAt: Date.now(),
           lastWinRate: result.winRate,
@@ -280,7 +290,7 @@ async function handler(req, res) {
         }));
       }
     } else if (!result.shouldAlert && result.reason === "OK") {
-      await redis.del(ALERT_STATE_KEY);
+      await redis.del(alertStateKey);
     }
 
     sendJson(res, 200, {
