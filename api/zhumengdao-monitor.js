@@ -1,6 +1,7 @@
 const RECORDS_KEY = "zhumengdao:duel-records:v1";
 const ALERT_STATE_KEY = "zhumengdao:monitor:ernie-5.1:v1";
 const MAX_RECORDS_TO_SCAN = 20000;
+const DEFAULT_ALERT_EMAIL_TO = ["zhanghaoxin@baidu.com", "zhouchenyue@baidu.com"];
 
 let _redis = null;
 function getRedis() {
@@ -127,6 +128,25 @@ function formatTime(value = new Date()) {
   });
 }
 
+function parseEmailRecipients(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  return String(value || "")
+    .split(/[,\s;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function resolveAlertRecipients(value) {
+  const recipients = parseEmailRecipients(value);
+  const merged = recipients.length ? recipients : [];
+  for (const defaultRecipient of DEFAULT_ALERT_EMAIL_TO) {
+    if (!merged.includes(defaultRecipient)) merged.push(defaultRecipient);
+  }
+  return merged;
+}
+
 function buildAlertEmail({ to, result, now = new Date() }) {
   const pct = formatPercent(result.winRate);
   const thresholdPct = formatPercent(result.threshold);
@@ -149,15 +169,19 @@ function buildAlertEmail({ to, result, now = new Date() }) {
 function buildTestEmail({ to, targetModel = "ernie-5.1", now = new Date() }) {
   return {
     to,
-    subject: "[筑梦岛监控测试] 邮件链路验证成功",
+    subject: "[筑梦岛监控测试] ERNIE-5.1 胜率报警邮件测试",
     text: [
-      "这是一封筑梦岛监控测试邮件，用于确认邮件发送链路可用。",
+      "这是一封筑梦岛监控测试邮件，用于确认报警邮件可以正常发送。",
       "",
-      `监控项：${targetModel} 正常对话 A/B 胜率`,
-      `收件人：${to}`,
-      `发送时间：${formatTime(now)}`,
+      `当 ${targetModel.toUpperCase()} 在正常对话 A/B 评测中的胜率低于 55% 时，系统会向你推送报警邮件，并汇报当前胜率、样本数、胜场数和触发时间等信息。`,
       "",
-      "如果你收到这封邮件，说明 Resend API Key、Vercel 环境变量和邮件发送接口均已配置成功。",
+      "告警逻辑：",
+      "- 统计范围：正常对话 A/B，不包含灵感模式和继续聊。",
+      "- 触发条件：ERNIE-5.1 胜率低于 55%，且样本数不少于 30。",
+      "- 推送策略：同一次低胜率状态只推送一次；胜率恢复到 55% 及以上后，会重置告警状态，后续再次低于阈值时可重新推送。",
+      "- 自动检查时间：每天 10:00（北京时间）自动检查一次。",
+      "",
+      "本邮件仅用于测试邮件发送链路，不代表当前模型胜率已触发报警。",
     ].join("\n"),
   };
 }
@@ -173,7 +197,7 @@ async function sendEmail({ to, from, apiKey, subject, text }) {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ from, to: [to], subject, text }),
+    body: JSON.stringify({ from, to: parseEmailRecipients(to), subject, text }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -216,7 +240,7 @@ async function handler(req, res) {
     const targetModel = process.env.ALERT_TARGET_MODEL || "ernie-5.1";
     const threshold = toFiniteNumber(process.env.ALERT_WIN_RATE_THRESHOLD, 0.55);
     const minSamples = toFiniteNumber(process.env.ALERT_MIN_SAMPLES, 30);
-    const emailTo = process.env.ALERT_EMAIL_TO || "zhanghaoxin@baidu.com";
+    const emailTo = resolveAlertRecipients(process.env.ALERT_EMAIL_TO);
     const emailFrom = process.env.ALERT_EMAIL_FROM || "Zhumengdao Monitor <alert@notify.ethan7zhanghx.com>";
 
     if (String(req.query?.testEmail || "") === "1") {
@@ -285,4 +309,5 @@ module.exports = handler;
 module.exports.buildAlertEmail = buildAlertEmail;
 module.exports.buildTestEmail = buildTestEmail;
 module.exports.evaluateModelWinRate = evaluateModelWinRate;
+module.exports.resolveAlertRecipients = resolveAlertRecipients;
 module.exports.shouldSendEmail = shouldSendEmail;
