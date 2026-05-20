@@ -1,6 +1,7 @@
 const RECORDS_KEY = "zhumengdao:duel-records:v1";
 const ALERT_STATE_KEY = "zhumengdao:monitor:ernie-5.1:v1";
 const MAX_RECORDS_TO_SCAN = 20000;
+const DEFAULT_ALERT_EMAIL_TO = ["zhanghaoxin@baidu.com", "zhouchenyue@baidu.com"];
 
 let _redis = null;
 function getRedis() {
@@ -110,25 +111,85 @@ function shouldSendEmail(state, now = Date.now()) {
   return !lastSentAt || now - lastSentAt >= 24 * 60 * 60 * 1000;
 }
 
-async function sendAlertEmail({ to, from, apiKey, result }) {
+function formatPercent(value) {
+  return Math.round(value * 10000) / 100;
+}
+
+function formatTime(value = new Date()) {
+  return new Date(value).toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function parseEmailRecipients(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  return String(value || "")
+    .split(/[,\s;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function resolveAlertRecipients(value) {
+  const recipients = parseEmailRecipients(value);
+  const merged = recipients.length ? recipients : [];
+  for (const defaultRecipient of DEFAULT_ALERT_EMAIL_TO) {
+    if (!merged.includes(defaultRecipient)) merged.push(defaultRecipient);
+  }
+  return merged;
+}
+
+function buildAlertEmail({ to, result, now = new Date() }) {
+  const pct = formatPercent(result.winRate);
+  const thresholdPct = formatPercent(result.threshold);
+  return {
+    to,
+    subject: `[筑梦岛报警] ${result.targetModel} 胜率低于 ${thresholdPct}%`,
+    text: [
+      `筑梦岛监控发现 ${result.targetModel} 在正常对话 A/B 中的胜率低于阈值。`,
+      "",
+      `模型：${result.targetModel}`,
+      `当前胜率：${pct}%`,
+      `报警阈值：${thresholdPct}%`,
+      `样本数：${result.samples}`,
+      `胜场：${result.wins}`,
+      `触发时间：${formatTime(now)}`,
+    ].join("\n"),
+  };
+}
+
+function buildTestEmail({ to, targetModel = "ernie-5.1", now = new Date() }) {
+  return {
+    to,
+    subject: "[筑梦岛监控测试] ERNIE-5.1 胜率报警邮件测试",
+    text: [
+      "这是一封筑梦岛监控测试邮件，用于确认报警邮件可以正常发送。",
+      "",
+      `当 ${targetModel.toUpperCase()} 在正常对话 A/B 评测中的胜率低于 55% 时，系统会向你推送报警邮件，并汇报当前胜率、样本数、胜场数和触发时间等信息。`,
+      "",
+      "告警逻辑：",
+      "- 统计范围：正常对话 A/B，不包含灵感模式和继续聊。",
+      "- 触发条件：ERNIE-5.1 胜率低于 55%，且样本数不少于 30。",
+      "- 推送策略：同一次低胜率状态只推送一次；胜率恢复到 55% 及以上后，会重置告警状态，后续再次低于阈值时可重新推送。",
+      "- 自动检查时间：每天 10:00（北京时间）自动检查一次。",
+      "",
+      "本邮件仅用于测试邮件发送链路，不代表当前模型胜率已触发报警。",
+    ].join("\n"),
+  };
+}
+
+async function sendEmail({ to, from, apiKey, subject, text }) {
   if (!apiKey) {
     return { sent: false, skipped: "RESEND_API_KEY is not configured" };
   }
-
-  const pct = Math.round(result.winRate * 10000) / 100;
-  const thresholdPct = Math.round(result.threshold * 10000) / 100;
-  const subject = `筑梦岛模型胜率报警：${result.targetModel} ${pct}%`;
-  const text = [
-    `筑梦岛模型胜率低于阈值。`,
-    "",
-    `模型：${result.targetModel}`,
-    `当前胜率：${pct}%`,
-    `报警阈值：${thresholdPct}%`,
-    `样本数：${result.samples}`,
-    `胜场：${result.wins}`,
-    "",
-    `统计口径：仅正常对话 A/B 的已选择胜者记录，不包含灵感模式和继续聊。`,
-  ].join("\n");
 
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -136,7 +197,7 @@ async function sendAlertEmail({ to, from, apiKey, result }) {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ from, to: [to], subject, text }),
+    body: JSON.stringify({ from, to: parseEmailRecipients(to), subject, text }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -146,6 +207,14 @@ async function sendAlertEmail({ to, from, apiKey, result }) {
     throw error;
   }
   return { sent: true, provider: "resend", id: data.id || "" };
+}
+
+async function sendAlertEmail({ to, from, apiKey, result }) {
+  return sendEmail({ from, apiKey, ...buildAlertEmail({ to, result }) });
+}
+
+async function sendTestEmail({ to, from, apiKey, targetModel }) {
+  return sendEmail({ from, apiKey, ...buildTestEmail({ to, targetModel }) });
 }
 
 function isAuthorized(req) {
@@ -171,8 +240,24 @@ async function handler(req, res) {
     const targetModel = process.env.ALERT_TARGET_MODEL || "ernie-5.1";
     const threshold = toFiniteNumber(process.env.ALERT_WIN_RATE_THRESHOLD, 0.55);
     const minSamples = toFiniteNumber(process.env.ALERT_MIN_SAMPLES, 30);
-    const emailTo = process.env.ALERT_EMAIL_TO || "zhanghaoxin@baidu.com";
-    const emailFrom = process.env.ALERT_EMAIL_FROM || "Zhumengdao Monitor <onboarding@resend.dev>";
+    const emailTo = resolveAlertRecipients(process.env.ALERT_EMAIL_TO);
+    const emailFrom = process.env.ALERT_EMAIL_FROM || "Zhumengdao Monitor <alert@notify.ethan7zhanghx.com>";
+
+    if (String(req.query?.testEmail || "") === "1") {
+      const email = await sendTestEmail({
+        to: emailTo,
+        from: emailFrom,
+        apiKey: process.env.RESEND_API_KEY || "",
+        targetModel,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        mode: "testEmail",
+        email,
+        emailTo,
+      });
+      return;
+    }
 
     const records = await readRecords(redis);
     const result = evaluateModelWinRate(records, { targetModel, threshold, minSamples });
@@ -221,5 +306,8 @@ async function handler(req, res) {
 }
 
 module.exports = handler;
+module.exports.buildAlertEmail = buildAlertEmail;
+module.exports.buildTestEmail = buildTestEmail;
 module.exports.evaluateModelWinRate = evaluateModelWinRate;
+module.exports.resolveAlertRecipients = resolveAlertRecipients;
 module.exports.shouldSendEmail = shouldSendEmail;
