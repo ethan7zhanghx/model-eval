@@ -217,7 +217,7 @@ async function handler(req, res) {
     const threshold = toFiniteNumber(process.env.ALERT_WIN_RATE_THRESHOLD, 0.55);
     const minSamples = toFiniteNumber(process.env.ALERT_MIN_SAMPLES, 30);
     const emailTo = process.env.ALERT_EMAIL_TO || "zhanghaoxin@baidu.com";
-    const emailFrom = process.env.ALERT_EMAIL_FROM || "Zhumengdao Monitor <onboarding@resend.dev>";
+    const emailFrom = process.env.ALERT_EMAIL_FROM || "Zhumengdao Monitor <alert@notify.ethan7zhanghx.com>";
 
     if (String(req.query?.testEmail || "") === "1") {
       const email = await sendTestEmail({
