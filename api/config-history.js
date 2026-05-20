@@ -1,4 +1,5 @@
 const MAX_CONFIG_HISTORY = 30;
+const { namespacedKey } = require("../lib/storage-namespace");
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -124,7 +125,7 @@ async function requestKv(command, args = []) {
 }
 
 function historyKey(workspace) {
-  return `openrouter-case-runner:config-history:${workspace}`;
+  return namespacedKey(`openrouter-case-runner:config-history:${workspace}`);
 }
 
 async function readHistory(workspace) {
