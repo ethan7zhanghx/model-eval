@@ -110,25 +110,62 @@ function shouldSendEmail(state, now = Date.now()) {
   return !lastSentAt || now - lastSentAt >= 24 * 60 * 60 * 1000;
 }
 
-async function sendAlertEmail({ to, from, apiKey, result }) {
+function formatPercent(value) {
+  return Math.round(value * 10000) / 100;
+}
+
+function formatTime(value = new Date()) {
+  return new Date(value).toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function buildAlertEmail({ to, result, now = new Date() }) {
+  const pct = formatPercent(result.winRate);
+  const thresholdPct = formatPercent(result.threshold);
+  return {
+    to,
+    subject: `[筑梦岛报警] ${result.targetModel} 胜率低于 ${thresholdPct}%`,
+    text: [
+      `筑梦岛监控发现 ${result.targetModel} 在正常对话 A/B 中的胜率低于阈值。`,
+      "",
+      `模型：${result.targetModel}`,
+      `当前胜率：${pct}%`,
+      `报警阈值：${thresholdPct}%`,
+      `样本数：${result.samples}`,
+      `胜场：${result.wins}`,
+      `触发时间：${formatTime(now)}`,
+    ].join("\n"),
+  };
+}
+
+function buildTestEmail({ to, targetModel = "ernie-5.1", now = new Date() }) {
+  return {
+    to,
+    subject: "[筑梦岛监控测试] 邮件链路验证成功",
+    text: [
+      "这是一封筑梦岛监控测试邮件，用于确认邮件发送链路可用。",
+      "",
+      `监控项：${targetModel} 正常对话 A/B 胜率`,
+      `收件人：${to}`,
+      `发送时间：${formatTime(now)}`,
+      "",
+      "如果你收到这封邮件，说明 Resend API Key、Vercel 环境变量和邮件发送接口均已配置成功。",
+    ].join("\n"),
+  };
+}
+
+async function sendEmail({ to, from, apiKey, subject, text }) {
   if (!apiKey) {
     return { sent: false, skipped: "RESEND_API_KEY is not configured" };
   }
-
-  const pct = Math.round(result.winRate * 10000) / 100;
-  const thresholdPct = Math.round(result.threshold * 10000) / 100;
-  const subject = `筑梦岛模型胜率报警：${result.targetModel} ${pct}%`;
-  const text = [
-    `筑梦岛模型胜率低于阈值。`,
-    "",
-    `模型：${result.targetModel}`,
-    `当前胜率：${pct}%`,
-    `报警阈值：${thresholdPct}%`,
-    `样本数：${result.samples}`,
-    `胜场：${result.wins}`,
-    "",
-    `统计口径：仅正常对话 A/B 的已选择胜者记录，不包含灵感模式和继续聊。`,
-  ].join("\n");
 
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -146,6 +183,14 @@ async function sendAlertEmail({ to, from, apiKey, result }) {
     throw error;
   }
   return { sent: true, provider: "resend", id: data.id || "" };
+}
+
+async function sendAlertEmail({ to, from, apiKey, result }) {
+  return sendEmail({ from, apiKey, ...buildAlertEmail({ to, result }) });
+}
+
+async function sendTestEmail({ to, from, apiKey, targetModel }) {
+  return sendEmail({ from, apiKey, ...buildTestEmail({ to, targetModel }) });
 }
 
 function isAuthorized(req) {
@@ -173,6 +218,22 @@ async function handler(req, res) {
     const minSamples = toFiniteNumber(process.env.ALERT_MIN_SAMPLES, 30);
     const emailTo = process.env.ALERT_EMAIL_TO || "zhanghaoxin@baidu.com";
     const emailFrom = process.env.ALERT_EMAIL_FROM || "Zhumengdao Monitor <onboarding@resend.dev>";
+
+    if (String(req.query?.testEmail || "") === "1") {
+      const email = await sendTestEmail({
+        to: emailTo,
+        from: emailFrom,
+        apiKey: process.env.RESEND_API_KEY || "",
+        targetModel,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        mode: "testEmail",
+        email,
+        emailTo,
+      });
+      return;
+    }
 
     const records = await readRecords(redis);
     const result = evaluateModelWinRate(records, { targetModel, threshold, minSamples });
@@ -221,5 +282,7 @@ async function handler(req, res) {
 }
 
 module.exports = handler;
+module.exports.buildAlertEmail = buildAlertEmail;
+module.exports.buildTestEmail = buildTestEmail;
 module.exports.evaluateModelWinRate = evaluateModelWinRate;
 module.exports.shouldSendEmail = shouldSendEmail;
